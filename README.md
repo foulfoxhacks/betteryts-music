@@ -52,6 +52,12 @@ cd android
 
 Tests for the core: `cd core; cargo test` (plus `cargo test -- --ignored` for live-API checks).
 
+## Optional: Connect with Google
+
+Library → **Connect with Google** imports YouTube / YouTube Music playlists, liked songs and
+subscriptions (read-only). Sign-in runs in the browser through the BetterYTS Worker, so it
+doesn't need Google Play services. Setup and the Google Cloud steps: [docs/google-setup.md](docs/google-setup.md).
+
 ## Links into the app
 
 Sharing a YouTube or YouTube Music link to the app plays it (songs), opens it (playlists,

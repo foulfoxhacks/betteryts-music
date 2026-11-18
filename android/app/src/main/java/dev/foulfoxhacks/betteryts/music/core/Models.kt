@@ -202,11 +202,13 @@ data class QueueState(
     }
 }
 
-data class UserPlaylist(val id: String, val name: String, val tracks: List<Track>, val createdAt: Long) {
+data class UserPlaylist(val id: String, val name: String, val tracks: List<Track>, val createdAt: Long, val source: String? = null) {
+    val fromYouTube get() = source?.startsWith("youtube:") == true
+
     companion object {
         fun from(o: JSONObject): UserPlaylist? {
             val id = o.str("id") ?: return null
-            return UserPlaylist(id, o.str("name") ?: "My playlist", Track.list(o.optJSONArray("tracks")), o.optLong("createdAt"))
+            return UserPlaylist(id, o.str("name") ?: "My playlist", Track.list(o.optJSONArray("tracks")), o.optLong("createdAt"), o.str("source"))
         }
     }
 }

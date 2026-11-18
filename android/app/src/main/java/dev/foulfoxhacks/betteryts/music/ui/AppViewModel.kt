@@ -1,6 +1,9 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
+import dev.foulfoxhacks.betteryts.music.account.GoogleAccount
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -473,4 +476,62 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun clearHistory() = io { library = Core.clearHistory() }
+
+    // ---------------------------------------------------------------------------------------
+    // Google account (optional): read-only import of the user's YouTube library
+    // ---------------------------------------------------------------------------------------
+
+    private val google = GoogleAccount(app)
+    var googleConnected by mutableStateOf(google.isConnected)
+        private set
+    var googleChannel by mutableStateOf(google.channel)
+        private set
+    /** What the Google card is doing right now ("Connecting…", "Importing…"), or null. */
+    var googleBusy by mutableStateOf<String?>(null)
+        private set
+
+    fun googleSignInIntent(): Intent = google.signInIntent()
+
+    fun finishGoogleSignIn(uri: Uri) = io {
+        selectTab(Tab.Library)
+        googleBusy = "Connecting…"
+        try {
+            google.complete(uri)
+            googleConnected = google.isConnected
+            googleChannel = google.channel
+            message = "Connected${googleChannel?.let { " as $it" } ?: ""}. Import your library below."
+        } finally {
+            googleBusy = null
+        }
+    }
+
+    fun importFromGoogle(playlists: Boolean, liked: Boolean, subscriptions: Boolean) = io {
+        googleBusy = "Importing your YouTube library…"
+        try {
+            val (lib, s) = google.withToken { Core.googleImport(it, playlists, liked, subscriptions) }
+            library = lib
+            message = buildList {
+                if (s.playlistsAdded + s.playlistsUpdated > 0) add("${s.playlistsAdded + s.playlistsUpdated} playlists")
+                if (s.favoritesAdded > 0) add("${s.favoritesAdded} liked songs")
+                if (s.artistsAdded > 0) add("${s.artistsAdded} artists")
+            }.let { if (it.isEmpty()) "Already up to date" else "Imported " + it.joinToString(", ") } +
+                if (s.playlistsSkipped > 0) " (${s.playlistsSkipped} playlists skipped: playlist limit reached)" else ""
+            if (s.artistsAdded > 0) refreshFeed()
+        } finally {
+            googleConnected = google.isConnected
+            googleBusy = null
+        }
+    }
+
+    fun disconnectGoogle() = io {
+        googleBusy = "Disconnecting…"
+        try {
+            google.disconnect()
+            message = "Disconnected. Your imported music stays in the app."
+        } finally {
+            googleConnected = google.isConnected
+            googleChannel = null
+            googleBusy = null
+        }
+    }
 }

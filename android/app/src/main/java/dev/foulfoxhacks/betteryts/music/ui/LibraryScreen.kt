@@ -43,6 +43,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                 DisplayTitle("Your library", size = 44)
             }
         }
+        item { GoogleCard(vm) }
         item {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(TABS) { (key, label) -> Chip(label, tab == key) { tab = key } }
@@ -70,7 +71,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                         RemoteImage(p.tracks.firstOrNull()?.art, Modifier.size(64.dp))
                         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                             Text(p.name, color = Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${p.tracks.size} song${if (p.tracks.size == 1) "" else "s"}", color = Brand.Muted, fontSize = 13.sp)
+                            Text(listOfNotNull(if (p.fromYouTube) "From YouTube" else null, "${p.tracks.size} song${if (p.tracks.size == 1) "" else "s"}").joinToString(" · "), color = Brand.Muted, fontSize = 13.sp)
                         }
                     }
                 }

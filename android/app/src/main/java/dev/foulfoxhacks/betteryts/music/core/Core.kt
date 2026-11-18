@@ -86,4 +86,36 @@ object Core {
     suspend fun addToPlaylist(id: String, track: Track) = libraryOp("addToPlaylist", args("id" to id, "track" to track.toJson()))
     suspend fun removeFromPlaylist(id: String, index: Int) = libraryOp("removeFromPlaylist", args("id" to id, "index" to index)).first
     suspend fun toggleFollow(artist: Artist) = libraryOp("follow", args("artist" to artist.toJson()))
+
+    // ---- Google account (optional, read-only YouTube import) ----
+
+    /** The core's error for "this Google token doesn't work any more" (google.rs AUTH_ERROR). */
+    const val GOOGLE_AUTH_EXPIRED = "google_auth_expired"
+
+    data class Tokens(val accessToken: String, val expiresIn: Long, val refreshToken: String?)
+
+    private fun tokens(o: JSONObject) = Tokens(o.optString("accessToken"), o.optLong("expiresIn", 3600), o.str("refreshToken"))
+
+    suspend fun googleExchange(code: String, verifier: String) = tokens(obj("google.exchange", args("code" to code, "verifier" to verifier)))
+    suspend fun googleRefresh(refreshToken: String) = tokens(obj("google.refresh", args("refreshToken" to refreshToken)))
+    suspend fun googleRevoke(token: String) {
+        request("google.revoke", args("token" to token))
+    }
+
+    suspend fun googleProfile(accessToken: String): String? = request("google.profile", args("accessToken" to accessToken)) as? String
+
+    data class ImportSummary(val playlistsAdded: Int, val playlistsUpdated: Int, val playlistsSkipped: Int, val favoritesAdded: Int, val artistsAdded: Int)
+
+    suspend fun googleImport(accessToken: String, playlists: Boolean, liked: Boolean, subscriptions: Boolean): Pair<Library, ImportSummary> {
+        val o = obj("google.import", args("accessToken" to accessToken, "playlists" to playlists, "liked" to liked, "subscriptions" to subscriptions))
+        val r = o.optJSONObject("result") ?: JSONObject()
+        val summary = ImportSummary(
+            playlistsAdded = r.optInt("playlistsAdded"),
+            playlistsUpdated = r.optInt("playlistsUpdated"),
+            playlistsSkipped = r.optInt("playlistsSkipped"),
+            favoritesAdded = r.optInt("favoritesAdded"),
+            artistsAdded = r.optInt("artistsAdded"),
+        )
+        return Library.from(o.optJSONObject("library") ?: JSONObject()) to summary
+    }
 }

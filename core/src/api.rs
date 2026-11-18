@@ -144,7 +144,8 @@ impl Api {
 				serde_json::from_str(&text).map_err(|_| "BetterYTS sent something unexpected. Try again in a moment.".to_string())
 			}
 			Err(ureq::Error::Status(code, res)) => {
-				let msg = res.into_string().ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| model::s(&v, "error"));
+				// The Worker answers {"error":{"status":…,"message":"…"}}.
+				let msg = res.into_string().ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| crate::google::error_message(&v));
 				Err(msg.unwrap_or_else(|| format!("BetterYTS returned HTTP {code}")))
 			}
 			Err(ureq::Error::Transport(t)) => Err(format!("Can't reach BetterYTS. Check your connection. ({})", t.kind())),

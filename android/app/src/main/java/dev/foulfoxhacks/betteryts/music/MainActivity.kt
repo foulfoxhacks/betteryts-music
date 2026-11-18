@@ -38,6 +38,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        val data = intent?.data
+        if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "betterytsmusic" && data.host == "oauth") {
+            vm.finishGoogleSignIn(data)
+            return
+        }
         val text = when (intent?.action) {
             Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
             Intent.ACTION_VIEW -> intent.dataString

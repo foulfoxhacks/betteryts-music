@@ -30,6 +30,20 @@ pub struct UserPlaylist {
 	pub name: String,
 	pub tracks: Vec<Track>,
 	pub created_at: u64,
+	/// Where an imported playlist came from ("youtube:PL…"), so re-importing updates it in place.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source: Option<String>,
+}
+
+/// What a YouTube import changed.
+#[derive(Serialize, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSummary {
+	pub playlists_added: usize,
+	pub playlists_updated: usize,
+	pub playlists_skipped: usize,
+	pub favorites_added: usize,
+	pub artists_added: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -86,7 +100,7 @@ impl Library {
 		let mut seen = std::collections::HashSet::new();
 		let tracks = tracks.into_iter().filter(|t| seen.insert(t.id.clone())).take(MAX_PLAYLIST_TRACKS).collect();
 		let name = clip(name, 80);
-		let p = UserPlaylist { id, name: if name.is_empty() { "My playlist".into() } else { name }, tracks, created_at };
+		let p = UserPlaylist { id, name: if name.is_empty() { "My playlist".into() } else { name }, tracks, created_at, source: None };
 		self.playlists.insert(0, p.clone());
 		Some(p)
 	}
@@ -131,6 +145,49 @@ impl Library {
 			}
 			_ => false,
 		}
+	}
+
+	/// Merges a YouTube import. Safe to repeat: imported playlists are matched by their YouTube ID
+	/// and replaced, likes and subscriptions are only ever added (never removed), and anything the
+	/// user made in the app is left alone.
+	pub fn import_youtube(&mut self, playlists: Vec<(String, String, Vec<Track>)>, liked: Vec<Track>, followed: Vec<Artist>) -> ImportSummary {
+		let mut sum = ImportSummary::default();
+		for (yt_id, title, tracks) in playlists {
+			let source = format!("youtube:{yt_id}");
+			let mut seen = std::collections::HashSet::new();
+			let tracks: Vec<Track> = tracks.into_iter().filter(|t| seen.insert(t.id.clone())).take(MAX_PLAYLIST_TRACKS).collect();
+			if let Some(p) = self.playlists.iter_mut().find(|p| p.source.as_deref() == Some(source.as_str())) {
+				p.name = clip(&title, 80);
+				p.tracks = tracks;
+				sum.playlists_updated += 1;
+			} else if let Some(p) = self.create_playlist(&title, tracks) {
+				if let Some(mine) = self.playlist_mut(&p.id) {
+					mine.source = Some(source);
+				}
+				sum.playlists_added += 1;
+			} else {
+				sum.playlists_skipped += 1;
+			}
+		}
+		for t in liked {
+			if self.favorites.len() >= MAX_FAVORITES {
+				break;
+			}
+			if !self.is_favorite(&t.id) {
+				self.favorites.push(t);
+				sum.favorites_added += 1;
+			}
+		}
+		for a in followed {
+			if self.followed.len() >= MAX_FOLLOWED {
+				break;
+			}
+			if !self.is_following(&a.id) {
+				self.followed.push(a);
+				sum.artists_added += 1;
+			}
+		}
+		sum
 	}
 
 	pub fn is_following(&self, id: &str) -> bool {
@@ -258,6 +315,29 @@ mod tests {
 		assert!(s.lib.favorites.is_empty());
 		assert!(dir.join("library.json.bad").exists(), "corrupt file kept for recovery");
 		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn youtube_import_is_repeatable_and_keeps_local_data() {
+		let mut l = Library::default();
+		l.toggle_favorite(t("mine"));
+		l.create_playlist("Made here", vec![t("a")]);
+		let first = l.import_youtube(
+			vec![("PL1".into(), "Road trip".into(), vec![t("a"), t("b"), t("b")])],
+			vec![t("mine"), t("liked1")],
+			vec![artist("UC1", None), artist("UC2", None)],
+		);
+		assert_eq!(first, ImportSummary { playlists_added: 1, playlists_updated: 0, playlists_skipped: 0, favorites_added: 1, artists_added: 2 });
+		assert_eq!(l.favorites[0].id, "mine", "local favourites stay on top");
+		let imported = l.playlists.iter().find(|p| p.source.as_deref() == Some("youtube:PL1")).unwrap();
+		assert_eq!(imported.tracks.len(), 2, "duplicates dropped");
+
+		let again = l.import_youtube(vec![("PL1".into(), "Road trip 2".into(), vec![t("c")])], vec![t("liked1")], vec![artist("UC1", None)]);
+		assert_eq!(again, ImportSummary { playlists_updated: 1, ..Default::default() });
+		assert_eq!(l.playlists.len(), 2, "no duplicate playlist on re-import");
+		let imported = l.playlists.iter().find(|p| p.source.is_some()).unwrap();
+		assert_eq!((imported.name.as_str(), imported.tracks.len()), ("Road trip 2", 1));
+		assert!(l.playlists.iter().any(|p| p.name == "Made here" && p.source.is_none()), "app-made playlist untouched");
 	}
 
 	#[test]

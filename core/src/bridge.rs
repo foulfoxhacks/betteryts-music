@@ -13,7 +13,7 @@ use crate::api::{Api, Filter, DEFAULT_BASE};
 use crate::library::Store;
 use crate::model::{Artist, Track};
 use crate::queue::Queue;
-use crate::{links, queue};
+use crate::{google, links, queue};
 
 struct State {
 	api: Api,
@@ -191,6 +191,28 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 		"library.follow" => {
 			let artist: Artist = arg(a, "artist")?;
 			library_op(|l| l.toggle_follow(artist))
+		}
+
+		// ---- Google account (optional, read-only import) ----
+		"google.exchange" => {
+			let (code, verifier): (String, String) = (arg(a, "code")?, arg(a, "verifier")?);
+			to_value(google::exchange(api().base(), &code, &verifier)?)
+		}
+		"google.refresh" => to_value(google::refresh(api().base(), &arg::<String>(a, "refreshToken")?)?),
+		"google.revoke" => {
+			google::revoke(api().base(), &arg::<String>(a, "token")?)?;
+			Ok(Value::Null)
+		}
+		"google.profile" => to_value(google::YouTube::new(&arg::<String>(a, "accessToken")?).channel_title()?),
+		"google.import" => {
+			let yt = google::YouTube::new(&arg::<String>(a, "accessToken")?);
+			let want = |k: &str| a.get(k).and_then(Value::as_bool).unwrap_or(true);
+			// Fetch everything first (no lock held), then merge in one go.
+			let playlists = if want("playlists") { yt.playlists()? } else { Vec::new() };
+			let liked = if want("liked") { yt.liked()? } else { Vec::new() };
+			let followed = if want("subscriptions") { yt.subscriptions()? } else { Vec::new() };
+			let playlists = playlists.into_iter().map(|p| (p.id, p.title, p.tracks)).collect();
+			library_op(|l| l.import_youtube(playlists, liked, followed))
 		}
 
 		other => Err(format!("Unknown method `{other}`")),

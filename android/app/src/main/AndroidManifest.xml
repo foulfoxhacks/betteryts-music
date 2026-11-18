@@ -32,6 +32,14 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
 
+            <!-- Google sign-in comes back here from the BetterYTS Worker (PKCE protects the code). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="betterytsmusic" android:host="oauth" />
+            </intent-filter>
+
             <!-- Offer to open YouTube Music and BetterYTS links. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

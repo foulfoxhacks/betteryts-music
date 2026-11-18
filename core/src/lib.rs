@@ -11,6 +11,7 @@
 
 pub mod api;
 pub mod bridge;
+pub mod google;
 pub mod library;
 pub mod links;
 pub mod model;
