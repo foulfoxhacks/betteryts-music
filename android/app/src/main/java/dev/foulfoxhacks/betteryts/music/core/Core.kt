@@ -87,6 +87,53 @@ object Core {
     suspend fun removeFromPlaylist(id: String, index: Int) = libraryOp("removeFromPlaylist", args("id" to id, "index" to index)).first
     suspend fun toggleFollow(artist: Artist) = libraryOp("follow", args("artist" to artist.toJson()))
 
+    // ---- settings and plugins (core/src/plugins.rs) ----
+
+    data class PluginInfo(val id: String, val name: String, val description: String, val category: String, val enabled: Boolean)
+    data class Settings(val theme: String = "ember", val themes: List<Pair<String, String>> = emptyList(), val plugins: List<PluginInfo> = emptyList()) {
+        fun on(id: String) = plugins.any { it.id == id && it.enabled }
+    }
+
+    private fun settingsFrom(o: JSONObject): Settings {
+        val themes = o.optJSONArray("themes").mapObjects { (it.str("id") ?: return@mapObjects null) to (it.str("name") ?: "") }
+        val plugins = o.optJSONArray("plugins").mapObjects {
+            PluginInfo(it.str("id") ?: return@mapObjects null, it.str("name") ?: "", it.str("description") ?: "", it.str("category") ?: "", it.optBoolean("enabled"))
+        }
+        return Settings(o.str("theme") ?: "ember", themes, plugins)
+    }
+
+    suspend fun settings() = settingsFrom(obj("settings.get"))
+    suspend fun setTheme(id: String) = settingsFrom(obj("settings.theme", args("theme" to id)))
+    suspend fun setPlugin(id: String, enabled: Boolean) = settingsFrom(obj("plugins.set", args("id" to id, "enabled" to enabled)))
+
+    data class Segment(val start: Float, val end: Float)
+
+    suspend fun segments(id: String): List<Segment> {
+        val a = request("plugin.segments", args("id" to id)) as? org.json.JSONArray
+        return a.mapObjects { Segment(it.optDouble("start").toFloat(), it.optDouble("end").toFloat()) }
+    }
+
+    /** (likes, dislikes), or null when there's no vote data. */
+    suspend fun dislikes(id: String): Pair<Long, Long>? {
+        val o = request("plugin.dislikes", args("id" to id)) as? JSONObject ?: return null
+        return if (o.has("likes") && o.has("dislikes")) o.optLong("likes") to o.optLong("dislikes") else null
+    }
+
+    data class LyricLine(val time: Float, val text: String)
+    data class Lyrics(val synced: List<LyricLine>, val plain: String?, val instrumental: Boolean)
+
+    suspend fun lyrics(track: Track): Lyrics? {
+        val o = request("plugin.lyrics", args("track" to track.toJson())) as? JSONObject ?: return null
+        return Lyrics(
+            synced = o.optJSONArray("synced").mapObjects { LyricLine(it.optDouble("time").toFloat(), it.optString("text")) },
+            plain = o.str("plain"),
+            instrumental = o.optBoolean("instrumental"),
+        )
+    }
+
+    suspend fun protvPlaylist(name: String, tracks: List<Track>): String =
+        request("plugin.protv", args("name" to name, "tracks" to Track.array(tracks))) as? String ?: ""
+
     // ---- Google account (optional, read-only YouTube import) ----
 
     /** The core's error for "this Google token doesn't work any more" (google.rs AUTH_ERROR). */

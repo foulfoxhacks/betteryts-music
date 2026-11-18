@@ -28,6 +28,9 @@ class PlayerController(context: Context) {
         fun onStartedPlaying(id: String)
         fun onEnded(id: String)
         fun onError(id: String?, code: Int)
+
+        /** About twice a second while a song is loaded; plugins (SponsorBlock) use it. */
+        fun onProgress(id: String, seconds: Float, duration: Float) {}
     }
 
     var listener: Listener? = null
@@ -136,6 +139,7 @@ class PlayerController(context: Context) {
         fun onTime(seconds: Double, total: Double) = main.post {
             if (!seeking) position = seconds.toFloat()
             if (total > 0) duration = total.toFloat()
+            currentId?.let { if (!seeking) listener?.onProgress(it, seconds.toFloat(), duration) }
         }
     }
 

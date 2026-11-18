@@ -78,6 +78,8 @@ fun App(vm: AppViewModel, player: PlayerController) {
             if (current != null) MiniPlayer(vm, player, current, MINI_HEIGHT, MINI_VIDEO_WIDTH)
             BottomBar(vm, bottom)
         }
+        // Status-bar backing: scrolled content never sits under the clock.
+        Box(Modifier.fillMaxWidth().height(top).background(Brand.Ink.copy(alpha = 0.94f)))
 
         // Full player. Its video slot is sized to fit landscape screens too.
         val fullVideoWidth = min(maxWidth, (maxHeight - top - PLAYER_TOP_BAR) * 0.55f * 16f / 9f)
@@ -125,6 +127,7 @@ private fun Screens(vm: AppViewModel, pad: PaddingValues) {
         is Route.ArtistRoute -> ArtistScreen(vm, route, pad)
         is Route.CollectionRoute -> CollectionScreen(vm, route.collection, pad)
         is Route.PlaylistRoute -> UserPlaylistScreen(vm, route.id, pad)
+        Route.SettingsRoute -> SettingsScreen(vm, pad)
         null -> when (vm.tab) {
             Tab.Home -> HomeScreen(vm, pad)
             Tab.Search -> SearchScreen(vm, pad)

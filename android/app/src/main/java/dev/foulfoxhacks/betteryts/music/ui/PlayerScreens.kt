@@ -1,12 +1,17 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -17,8 +22,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -27,22 +35,31 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.foulfoxhacks.betteryts.music.core.Core
 import dev.foulfoxhacks.betteryts.music.core.Repeat
 import dev.foulfoxhacks.betteryts.music.core.Track
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
+import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
+import kotlinx.coroutines.launch
 
 fun formatTime(seconds: Float): String {
     val s = seconds.toInt().coerceAtLeast(0)
@@ -52,10 +69,40 @@ fun formatTime(seconds: Float): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }
 
-/** Bar above the bottom navigation. The video sits in the first [videoWidth] (drawn by the App's video layer). */
+private fun compact(n: Long): String = when {
+    n >= 1_000_000 -> "%.1fM".format(n / 1_000_000.0)
+    n >= 1_000 -> "%.1fK".format(n / 1_000.0)
+    else -> n.toString()
+}
+
+fun copyText(context: Context, label: String, text: String) {
+    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, text))
+}
+
+/**
+ * Bar above the bottom navigation. The video sits in the first [videoWidth] (drawn by the App's
+ * video layer). Swipe left/right to skip, tap to open the full player.
+ */
 @Composable
 fun MiniPlayer(vm: AppViewModel, player: PlayerController, track: Track, height: Dp, videoWidth: Dp) {
-    Column(Modifier.fillMaxWidth().background(Brand.Surface)) {
+    var drag by remember { mutableFloatStateOf(0f) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Brand.Surface)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        when {
+                            drag < -120f -> vm.next()
+                            drag > 120f -> vm.previous()
+                        }
+                        drag = 0f
+                    },
+                    onDragCancel = { drag = 0f },
+                ) { _, amount -> drag += amount }
+            },
+    ) {
         val progress = if (player.duration > 0) (player.position / player.duration).coerceIn(0f, 1f) else 0f
         Box(Modifier.fillMaxWidth().height(2.dp).background(Brand.Line)) {
             Box(Modifier.fillMaxWidth(progress).fillMaxHeight().background(Brand.Gold))
@@ -76,75 +123,232 @@ fun MiniPlayer(vm: AppViewModel, player: PlayerController, track: Track, height:
     }
 }
 
+private enum class PlayerTab(val label: String) { UpNext("Up next"), Lyrics("Lyrics"), Related("Related") }
+
 /** Full-screen player. The video occupies [videoHeight] under the top bar (drawn by the App's video layer). */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NowPlaying(vm: AppViewModel, player: PlayerController, top: Dp, bottom: Dp, videoHeight: Dp) {
     val q = vm.queue
     val track = q.current ?: return
+    var tab by rememberSaveable { mutableStateOf(PlayerTab.UpNext) }
+    val tabs = PlayerTab.entries.filter { it != PlayerTab.Lyrics || vm.pluginOn("lyrics") }
+    if (tab !in tabs) tab = PlayerTab.UpNext
     val list = rememberLazyListState()
-    LaunchedEffect(Unit) { list.scrollToItem(0) }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Brand.Ink)
-            .background(Brush.radialGradient(listOf(Color(0x40FF681E), Color.Transparent), radius = 900f))
-            .padding(top = top),
-    ) {
-        Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { vm.playerExpanded = false }) { Icon(AppIcons.Collapse, "Close player", tint = Brand.Paper) }
-            Eyebrow("Now playing", Modifier.weight(1f))
-            Text("${q.position + 1} / ${q.tracks.size}", Modifier.padding(end = 16.dp), color = Brand.Muted, fontSize = 12.sp)
-        }
-        Spacer(Modifier.height(videoHeight))
+    Box(Modifier.fillMaxSize().background(Brand.Ink)) {
+        // Blurred artwork + the theme's glow behind everything.
+        RemoteImage(track.largeArt, Modifier.fillMaxWidth().height(420.dp).blur(48.dp))
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Brand.Ink.copy(alpha = 0.55f), Brand.Ink.copy(alpha = 0.92f), Brand.Ink), endY = 1400f)))
+        Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Brand.Glow, Color.Transparent), radius = 900f)))
 
-        LazyColumn(state = list, modifier = Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottom + 16.dp)) {
-            item {
-                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(track.title, Modifier.basicMarquee(), color = Brand.Paper, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 1)
-                        Text(
-                            track.artist,
-                            Modifier.clickable(enabled = track.artistId != null) { vm.openArtist(track.artistId, track.artist) },
-                            color = Brand.Tan,
-                            fontSize = 15.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+        Column(Modifier.fillMaxSize().padding(top = top)) {
+            PlayerTopBar(vm, track)
+            Spacer(Modifier.height(videoHeight))
+
+            LazyColumn(state = list, modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = bottom + 16.dp)) {
+                item { TitleRow(vm, track) }
+                item { SeekBar(vm, player, track) }
+                item { Controls(vm, player) }
+                item {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        tabs.forEach { t -> Chip(t.label, tab == t) { tab = t } }
                     }
-                    val fav = vm.library.isFavorite(track.id)
-                    IconButton(onClick = { vm.toggleFavorite(track) }) {
-                        Icon(if (fav) AppIcons.Favorite else AppIcons.FavoriteBorder, if (fav) "Remove from favorites" else "Add to favorites", tint = if (fav) Brand.Pink else Brand.Paper)
-                    }
-                    IconButton(onClick = { vm.playlistPickerFor = track }) { Icon(AppIcons.PlaylistAdd, "Add to playlist", tint = Brand.Paper) }
+                }
+                when (tab) {
+                    PlayerTab.UpNext -> upNext(vm, q)
+                    PlayerTab.Lyrics -> item { LyricsPanel(vm, player, track) }
+                    PlayerTab.Related -> related(vm, track)
+                }
+                item {
+                    Text(
+                        "Plays through YouTube's official player, so music pauses when you leave the app.",
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        color = Brand.Muted.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                    )
                 }
             }
-            item { SeekBar(vm, player, track) }
-            item { Controls(vm, player) }
-            item {
-                Text(
-                    "Plays through YouTube's official player, so music pauses when you leave the app.",
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = Brand.Muted.copy(alpha = 0.7f),
-                    fontSize = 11.sp,
-                )
+        }
+    }
+}
+
+@Composable
+private fun PlayerTopBar(vm: AppViewModel, track: Track) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var menu by remember { mutableStateOf(false) }
+    var sleepMenu by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = { vm.playerExpanded = false }) { Icon(AppIcons.Collapse, "Close player", tint = Brand.Paper) }
+        Column(Modifier.weight(1f)) {
+            Eyebrow("Now playing")
+            val sleep = vm.sleepAt
+            val note = when {
+                vm.sleepAtEndOfSong -> "Sleep timer: after this song"
+                sleep != null -> "Sleep timer: ${((sleep - System.currentTimeMillis()) / 60_000).coerceAtLeast(0) + 1} min"
+                else -> "${vm.queue.position + 1} of ${vm.queue.tracks.size}"
             }
-            item { SectionHeader("Up next") }
-            itemsIndexed(q.tracks, key = { i, t -> "q-$i-" + t.id }) { i, t ->
-                TrackRow(
-                    vm,
-                    t,
-                    onClick = { vm.jumpTo(i) },
-                    current = i == q.position,
-                    leading = "${i + 1}",
-                    extraActions = buildList {
-                        add("Remove from queue" to { vm.removeFromQueue(i) })
-                        if (i > 0) add("Move up" to { vm.moveInQueue(i, i - 1) })
-                        if (i < q.tracks.lastIndex) add("Move down" to { vm.moveInQueue(i, i + 1) })
-                    },
-                )
+            Text(note, color = Brand.Muted, fontSize = 11.sp)
+        }
+        if (vm.pluginOn("sleep")) {
+            Box {
+                IconButton(onClick = { sleepMenu = true }) {
+                    Icon(AppIcons.Sleep, "Sleep timer", tint = if (vm.sleepAt != null || vm.sleepAtEndOfSong) Brand.Gold else Brand.Paper)
+                }
+                DropdownMenu(sleepMenu, onDismissRequest = { sleepMenu = false }, containerColor = Brand.Raised) {
+                    listOf(15, 30, 45, 60, 90, 120).forEach { m ->
+                        DropdownMenuItem(text = { Text("$m minutes", color = Brand.Paper) }, onClick = { sleepMenu = false; vm.sleepIn(m) })
+                    }
+                    DropdownMenuItem(text = { Text("End of this song", color = Brand.Paper) }, onClick = { sleepMenu = false; vm.sleepAfterThisSong() })
+                    if (vm.sleepAt != null || vm.sleepAtEndOfSong) {
+                        DropdownMenuItem(text = { Text("Turn off sleep timer", color = Brand.Ember) }, onClick = { sleepMenu = false; vm.cancelSleep(); vm.message = "Sleep timer off" })
+                    }
+                }
             }
+        }
+        Box {
+            IconButton(onClick = { menu = true }) { Icon(AppIcons.More, "More", tint = Brand.Paper) }
+            DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = Brand.Raised) {
+                DropdownMenuItem(text = { Text("Add to playlist…", color = Brand.Paper) }, onClick = { menu = false; vm.playlistPickerFor = track })
+                if (track.artistId != null) DropdownMenuItem(text = { Text("Go to artist", color = Brand.Paper) }, onClick = { menu = false; vm.openArtist(track.artistId, track.artist) })
+                if (vm.pluginOn("vrchat")) {
+                    DropdownMenuItem(
+                        text = { Text("Copy VRChat link", color = Brand.Paper) },
+                        leadingIcon = { Icon(AppIcons.Headset, null, tint = Brand.Gold) },
+                        onClick = {
+                            menu = false
+                            copyText(context, "VRChat link", vm.vrchatLink(track))
+                            vm.message = "Copied. Paste it into any VRChat video player."
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Copy queue as ProTV playlist", color = Brand.Paper) },
+                        leadingIcon = { Icon(AppIcons.Copy, null, tint = Brand.Gold) },
+                        onClick = {
+                            menu = false
+                            scope.launch {
+                                copyText(context, "ProTV playlist", vm.protvQueue())
+                                vm.message = "Copied ${vm.queue.tracks.size} songs as a ProTV playlist"
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TitleRow(vm: AppViewModel, track: Track) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(track.title, Modifier.basicMarquee(), color = Brand.Paper, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 1)
+            Text(
+                track.artist,
+                Modifier.clickable(enabled = track.artistId != null) { vm.openArtist(track.artistId, track.artist) },
+                color = Brand.Tan,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val votes = vm.dislikes
+            if (vm.pluginOn("dislikes") && votes != null) {
+                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(AppIcons.ThumbUp, "Likes", Modifier.size(14.dp), tint = Brand.Muted)
+                    Text(" ${compact(votes.first)}   ", color = Brand.Muted, fontSize = 12.sp)
+                    Icon(AppIcons.ThumbDown, "Dislikes", Modifier.size(14.dp), tint = Brand.Muted)
+                    Text(" ${compact(votes.second)}", color = Brand.Muted, fontSize = 12.sp)
+                }
+            }
+        }
+        val fav = vm.library.isFavorite(track.id)
+        IconButton(onClick = { vm.toggleFavorite(track) }) {
+            Icon(if (fav) AppIcons.Favorite else AppIcons.FavoriteBorder, if (fav) "Remove from favorites" else "Add to favorites", tint = if (fav) Brand.Pink else Brand.Paper)
+        }
+    }
+}
+
+private fun LazyListScope.upNext(vm: AppViewModel, q: dev.foulfoxhacks.betteryts.music.core.QueueState) {
+    itemsIndexed(q.tracks, key = { i, t -> "q-$i-" + t.id }) { i, t ->
+        TrackRow(
+            vm,
+            t,
+            onClick = { vm.jumpTo(i) },
+            current = i == q.position,
+            leading = "${i + 1}",
+            extraActions = buildList {
+                add("Remove from queue" to { vm.removeFromQueue(i) })
+                if (i > 0) add("Move up" to { vm.moveInQueue(i, i - 1) })
+                if (i < q.tracks.lastIndex) add("Move down" to { vm.moveInQueue(i, i + 1) })
+            },
+        )
+    }
+}
+
+private fun LazyListScope.related(vm: AppViewModel, track: Track) {
+    val id = track.artistId
+    if (id == null) {
+        item { EmptyNote("Nothing related", "This song isn't linked to an artist page.") }
+        return
+    }
+    item {
+        LaunchedEffect(id) { if (vm.artistPages[id] !is Load.Ready) vm.loadArtist(id) }
+        Eyebrow("More from ${track.artist}", Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+    }
+    when (val page = vm.artistPages[id]) {
+        is Load.Ready -> {
+            val more = page.value.tracks.filter { it.id != track.id }.take(20)
+            itemsIndexed(more, key = { _, t -> "rel-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(more, i) }) }
+        }
+        is Load.Failed -> item { ErrorBox(page.message) { vm.loadArtist(id) } }
+        else -> item { Loading() }
+    }
+}
+
+/** Synced lyrics: the current line is highlighted and centred; tap a line to jump there. */
+@Composable
+private fun LyricsPanel(vm: AppViewModel, player: PlayerController, track: Track) {
+    LaunchedEffect(track.id) { vm.loadLyrics(track) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        when (val state = vm.lyrics[track.id]) {
+            is Load.Ready -> {
+                val l = state.value
+                when {
+                    l == null -> EmptyNote("No lyrics found", "LRCLIB doesn't have this song yet.")
+                    l.instrumental -> EmptyNote("Instrumental", "No lyrics: enjoy the music.")
+                    l.synced.isNotEmpty() -> SyncedLyrics(l.synced, player)
+                    l.plain != null -> Text(l.plain, color = Brand.Paper, fontSize = 18.sp, lineHeight = 28.sp)
+                    else -> EmptyNote("No lyrics found", "LRCLIB doesn't have this song yet.")
+                }
+                Text("Lyrics from LRCLIB", Modifier.padding(top = 12.dp), style = LabelStyle, fontSize = 10.sp, color = Brand.Muted)
+            }
+            is Load.Failed -> ErrorBox(state.message)
+            else -> Loading()
+        }
+    }
+}
+
+@Composable
+private fun SyncedLyrics(lines: List<Core.LyricLine>, player: PlayerController) {
+    val now = player.position
+    val current = lines.indexOfLast { it.time <= now + 0.3f }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        lines.forEachIndexed { i, line ->
+            val active = i == current
+            Text(
+                line.text.ifBlank { "♪" },
+                Modifier.fillMaxWidth().clickable { player.seek(line.time) },
+                color = when {
+                    active -> Brand.Gold
+                    i < current -> Brand.Muted.copy(alpha = 0.6f)
+                    else -> Brand.Paper.copy(alpha = 0.85f)
+                },
+                fontSize = if (active) 22.sp else 19.sp,
+                fontWeight = if (active) FontWeight.Black else FontWeight.Bold,
+                lineHeight = 28.sp,
+            )
         }
     }
 }

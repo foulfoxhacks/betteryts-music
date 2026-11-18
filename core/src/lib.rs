@@ -16,6 +16,7 @@ pub mod library;
 pub mod links;
 pub mod model;
 pub mod music;
+pub mod plugins;
 pub mod queue;
 
 mod jni_entry;

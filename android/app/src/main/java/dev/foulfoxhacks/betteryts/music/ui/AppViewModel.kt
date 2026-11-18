@@ -23,6 +23,8 @@ import dev.foulfoxhacks.betteryts.music.core.Link
 import dev.foulfoxhacks.betteryts.music.core.QueueState
 import dev.foulfoxhacks.betteryts.music.core.Track
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
+import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
+import dev.foulfoxhacks.betteryts.music.ui.theme.Palettes
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -34,7 +36,11 @@ sealed interface Route {
     data class ArtistRoute(val id: String, val name: String?) : Route
     data class CollectionRoute(val collection: Collection) : Route
     data class PlaylistRoute(val id: String) : Route
+    data object SettingsRoute : Route
 }
+
+/** A home shelf filled from a search, so Home has music on day one. */
+data class Shelf(val title: String, val query: String, val tracks: Load<List<Track>>)
 
 /** Loading state for a page. */
 sealed interface Load<out T> {
@@ -83,9 +89,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private var suggestJob: Job? = null
     private var searchJob: Job? = null
 
+    var settings by mutableStateOf(Core.Settings())
+        private set
+
     private val ready: Job = viewModelScope.launch {
         try {
             Core.init(app.filesDir.absolutePath, Locale.getDefault().country)
+            settings = Core.settings()
+            Brand.palette = Palettes.byId(settings.theme)
             library = Core.library()
             queue = Core.queueGet()
         } catch (e: CoreException) {
@@ -327,6 +338,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private fun playCurrent() {
         val t = queue.current ?: return
         player?.load(t.id)
+        onTrackChanged(t)
     }
 
     fun playTracks(tracks: List<Track>, start: Int, shuffle: Boolean = false) {
@@ -415,6 +427,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     override fun onEnded(id: String) {
         if (queue.current?.id != id) return
+        if (sleepAtEndOfSong) {
+            cancelSleep()
+            message = "Sleep timer: goodnight"
+            return
+        }
         io {
             val q = Core.queueNext(user = false)
             queue = q
@@ -478,6 +495,149 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     fun clearHistory() = io { library = Core.clearHistory() }
 
     // ---------------------------------------------------------------------------------------
+    // Settings, theme and plugins
+    // ---------------------------------------------------------------------------------------
+
+    fun openSettings() {
+        playerExpanded = false
+        if (stack.lastOrNull() != Route.SettingsRoute) stack.add(Route.SettingsRoute)
+    }
+
+    fun setTheme(id: String) {
+        Brand.palette = Palettes.byId(id) // instant; saved below
+        io { settings = Core.setTheme(id) }
+    }
+
+    fun setPlugin(id: String, enabled: Boolean) = io {
+        settings = Core.setPlugin(id, enabled)
+        val t = queue.current
+        if (enabled && t != null) onTrackChanged(t)
+        if (id == "sleep" && !enabled) cancelSleep()
+    }
+
+    fun pluginOn(id: String) = settings.on(id)
+
+    /** Per-song plugin data, keyed by video ID. */
+    private val segmentsFor = HashMap<String, List<Core.Segment>>()
+    private var skippedUntil = 0f
+    var dislikes by mutableStateOf<Pair<Long, Long>?>(null)
+        private set
+    val lyrics = mutableStateMapOf<String, Load<Core.Lyrics?>>()
+
+    private fun onTrackChanged(t: Track) {
+        skippedUntil = 0f
+        dislikes = null
+        if (pluginOn("sponsorblock") && t.id !in segmentsFor) {
+            viewModelScope.launch {
+                segmentsFor[t.id] = try { Core.segments(t.id) } catch (_: CoreException) { emptyList() }
+            }
+        }
+        if (pluginOn("dislikes")) {
+            viewModelScope.launch {
+                val d = try { Core.dislikes(t.id) } catch (_: CoreException) { null }
+                if (queue.current?.id == t.id) dislikes = d
+            }
+        }
+    }
+
+    /** SponsorBlock for music: jump over non-music parts; a trailing outro ends the song. */
+    override fun onProgress(id: String, seconds: Float, duration: Float) {
+        if (!pluginOn("sponsorblock") || queue.current?.id != id) return
+        val seg = segmentsFor[id]?.firstOrNull { seconds >= it.start && seconds < it.end - 0.5f && it.end > skippedUntil } ?: return
+        skippedUntil = seg.end
+        if (duration > 0 && seg.end >= duration - 1f) {
+            message = "Skipped the outro"
+            onEnded(id)
+        } else {
+            player?.seek(seg.end)
+            message = if (seg.start < 1f) "Skipped the intro" else "Skipped a non-music part"
+        }
+    }
+
+    fun loadLyrics(t: Track) {
+        val state = lyrics[t.id]
+        if (state is Load.Ready || state == Load.Loading) return
+        lyrics[t.id] = Load.Loading
+        viewModelScope.launch {
+            ready.join()
+            lyrics[t.id] = try {
+                Load.Ready(Core.lyrics(t))
+            } catch (e: CoreException) {
+                Load.Failed(e.message ?: "Couldn't load lyrics")
+            }
+        }
+    }
+
+    // ---- Sleep timer ----
+    var sleepAt by mutableStateOf<Long?>(null)
+        private set
+    var sleepAtEndOfSong by mutableStateOf(false)
+        private set
+    private var sleepJob: Job? = null
+
+    fun sleepIn(minutes: Int) {
+        cancelSleep()
+        val at = System.currentTimeMillis() + minutes * 60_000L
+        sleepAt = at
+        sleepJob = viewModelScope.launch {
+            delay(at - System.currentTimeMillis())
+            player?.pause()
+            sleepAt = null
+            message = "Sleep timer: goodnight"
+        }
+        message = "Music stops in $minutes min"
+    }
+
+    fun sleepAfterThisSong() {
+        cancelSleep()
+        sleepAtEndOfSong = true
+        message = "Music stops after this song"
+    }
+
+    fun cancelSleep() {
+        sleepJob?.cancel()
+        sleepJob = null
+        sleepAt = null
+        sleepAtEndOfSong = false
+    }
+
+    // ---- VRChat bridge ----
+    /** Link for any VRChat video player: BetterYTS redirects it to the video. */
+    fun vrchatLink(t: Track) = "https://yts.foulfoxhacks.dev/v/${t.id}"
+
+    suspend fun protvQueue(): String = Core.protvPlaylist("BetterYTS Music queue", queue.tracks)
+
+    // ---- "Mixed for you" shelves (fetched once per session) ----
+    var shelves by mutableStateOf<List<Shelf>>(emptyList())
+        private set
+
+    private fun loadShelves() {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val picks = listOf(
+            when (hour) {
+                in 5..11 -> "Morning energy" to "upbeat morning music"
+                in 12..17 -> "Afternoon focus" to "focus music instrumental"
+                in 18..22 -> "Evening chill" to "chill evening music"
+                else -> "Late night" to "late night lofi"
+            },
+            "Lo-fi beats" to "lofi hip hop",
+            "Today's hits" to "top hits this week",
+        )
+        shelves = picks.map { (title, q) -> Shelf(title, q, Load.Loading) }
+        picks.forEachIndexed { i, (title, q) ->
+            viewModelScope.launch {
+                ready.join()
+                val result: Load<List<Track>> = try {
+                    Load.Ready(Core.search(q, "songs").items.filterIsInstance<Item.TrackItem>().map { it.track }.filter { !it.live }.take(12))
+                } catch (e: CoreException) {
+                    Load.Failed(e.message ?: "Couldn't load")
+                }
+                shelves = shelves.toMutableList().also { if (i < it.size) it[i] = Shelf(title, q, result) }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Google account (optional): read-only import of the user's YouTube library
     // ---------------------------------------------------------------------------------------
 
@@ -533,5 +693,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             googleChannel = null
             googleBusy = null
         }
+    }
+
+    // Last, so every property above is initialised first (Kotlin runs initialisers in order).
+    init {
+        loadShelves()
     }
 }

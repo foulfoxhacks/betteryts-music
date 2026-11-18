@@ -91,8 +91,11 @@ pub fn track_from(v: &Value, fallback_artist: Option<(&str, &str)>) -> Option<Tr
 		Some(c) => (s(c, "name").unwrap_or_default(), s(c, "id").or_else(|| s(c, "handle"))),
 		None => (String::new(), None),
 	};
+	// On an artist page, items without their own channel belong to that artist. Collabs
+	// ("Lofi Girl and The Sims") keep their credit but still link back to the page's artist.
 	let (channel_name, channel_id) = match fallback_artist {
 		Some((name, id)) if channel_name.is_empty() => (name.to_string(), Some(id.to_string())),
+		Some((_, id)) if channel_id.is_none() => (channel_name, Some(id.to_string())),
 		_ => (channel_name, channel_id),
 	};
 	let raw_title = s(v, "title").unwrap_or_else(|| id.clone());
@@ -181,6 +184,9 @@ mod tests {
 		let t = track_from(&json!({"type": "video", "id": "aaaaaaaaaaa", "title": "Snowfall", "channel": null}), Some(("Øneheart", "UC123"))).unwrap();
 		assert_eq!(t.artist, "Øneheart");
 		assert_eq!(t.artist_id.as_deref(), Some("UC123"));
+		let collab = track_from(&json!({"type": "video", "id": "bbbbbbbbbbb", "title": "Song", "channel": {"name": "Lofi Girl and The Sims", "id": null}}), Some(("Lofi Girl", "UC123"))).unwrap();
+		assert_eq!(collab.artist, "Lofi Girl and The Sims");
+		assert_eq!(collab.artist_id.as_deref(), Some("UC123"));
 	}
 
 	#[test]

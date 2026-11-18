@@ -13,12 +13,14 @@ use crate::api::{Api, Filter, DEFAULT_BASE};
 use crate::library::Store;
 use crate::model::{Artist, Track};
 use crate::queue::Queue;
-use crate::{google, links, queue};
+use crate::plugins::SettingsStore;
+use crate::{google, links, plugins, queue};
 
 struct State {
 	api: Api,
 	queue: Queue,
 	store: Store,
+	settings: SettingsStore,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -29,7 +31,7 @@ fn state() -> MutexGuard<'static, Option<State>> {
 
 fn with_state<R>(f: impl FnOnce(&mut State) -> Result<R, String>) -> Result<R, String> {
 	let mut guard = state();
-	let s = guard.get_or_insert_with(|| State { api: Api::new(DEFAULT_BASE), queue: Queue::default(), store: Store::in_memory() });
+	let s = guard.get_or_insert_with(|| State { api: Api::new(DEFAULT_BASE), queue: Queue::default(), store: Store::in_memory(), settings: SettingsStore::in_memory() });
 	f(s)
 }
 
@@ -75,7 +77,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let queue = guard.take().map(|s| s.queue).unwrap_or_default();
 			let mut api = Api::new(&base);
 			api.region = opt_str(a, "region").unwrap_or("").chars().filter(|c| c.is_ascii_alphabetic()).take(2).collect::<String>().to_uppercase();
-			*guard = Some(State { api, queue, store: Store::open(Path::new(&dir)) });
+			*guard = Some(State { api, queue, store: Store::open(Path::new(&dir)), settings: SettingsStore::open(Path::new(&dir)) });
 			Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "baseUrl": base }))
 		}
 
@@ -215,6 +217,36 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			library_op(|l| l.import_youtube(playlists, liked, followed))
 		}
 
+		// ---- settings and plugins ----
+		"settings.get" => with_state(|s| Ok(s.settings.settings.view())),
+		"settings.theme" => {
+			let id: String = arg(a, "theme")?;
+			with_state(|s| {
+				if !s.settings.settings.set_theme(&id) {
+					return Err(format!("Unknown theme `{id}`"));
+				}
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
+		"plugins.set" => {
+			let (id, on): (String, bool) = (arg(a, "id")?, arg(a, "enabled")?);
+			with_state(|s| {
+				if !s.settings.settings.set_plugin(&id, on) {
+					return Err(format!("Unknown plugin `{id}`"));
+				}
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
+		"plugin.segments" => to_value(plugins::segments(&api(), &arg::<String>(a, "id")?)?),
+		"plugin.dislikes" => plugins::dislikes(&api(), &arg::<String>(a, "id")?),
+		"plugin.lyrics" => to_value(plugins::lyrics(&arg::<Track>(a, "track")?)?),
+		"plugin.protv" => {
+			let name: String = arg::<Option<String>>(a, "name")?.unwrap_or_default();
+			Ok(Value::String(plugins::protv_playlist(&name, &arg::<Vec<Track>>(a, "tracks")?)))
+		}
+
 		other => Err(format!("Unknown method `{other}`")),
 	}
 }
@@ -275,6 +307,16 @@ mod tests {
 		assert!(bad["error"].as_str().unwrap().contains("position"));
 		assert_eq!(call("nope", json!({}))["ok"], false);
 		assert_eq!(call("resolveLink", json!({ "text": "https://youtu.be/dQw4w9WgXcQ" }))["data"]["linkType"], "video");
+
+		// Settings persist across a restart too.
+		assert_eq!(call("settings.theme", json!({ "theme": "mello" }))["data"]["theme"], "mello");
+		assert_eq!(call("plugins.set", json!({ "id": "lyrics", "enabled": false }))["ok"], true);
+		assert_eq!(call("plugins.set", json!({ "id": "nope", "enabled": true }))["ok"], false);
+		call("init", json!({ "dataDir": dir.to_string_lossy() }));
+		let st = call("settings.get", json!({}));
+		assert_eq!(st["data"]["theme"], "mello");
+		assert_eq!(st["data"]["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "lyrics").unwrap()["enabled"], false);
+		assert!(call("plugin.protv", json!({ "name": "Q", "tracks": [track("aaaaaaaaaaa")] }))["data"].as_str().unwrap().contains("@https://www.youtube.com/watch?v=aaaaaaaaaaa"));
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 }

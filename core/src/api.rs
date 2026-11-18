@@ -136,6 +136,11 @@ impl Api {
 		url
 	}
 
+	/// Raw JSON from a BetterYTS endpoint (used by plugins).
+	pub fn get_json(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
+		self.get(path, query)
+	}
+
 	fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
 		let url = self.url(path, query);
 		match self.agent.get(&url).call() {
