@@ -1,0 +1,6 @@
+# Shell scripts must keep LF or they won't run on Linux/macOS/CI; batch files want CRLF.
+android/gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary

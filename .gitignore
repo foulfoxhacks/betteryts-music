@@ -1,0 +1,18 @@
+# Rust
+core/target/
+
+# Android / Gradle
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+
+# Built by scripts/build-core.ps1 from core/
+android/app/src/main/jniLibs/
+
+# Signing
+*.jks
+*.keystore

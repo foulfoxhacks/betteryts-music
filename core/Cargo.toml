@@ -1,0 +1,24 @@
+[package]
+name = "betteryts_core"
+version = "0.1.0"
+edition = "2021"
+description = "BetterYTS Music core: BetterYTS API client, play queue and on-device library"
+license = "MIT"
+publish = false
+
+[lib]
+# cdylib → libbetteryts_core.so for Android; rlib → `cargo test` on the desktop.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# rustls + webpki-roots: no OpenSSL to cross-compile, and the same TLS stack on every ABI.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+jni = "0.21"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

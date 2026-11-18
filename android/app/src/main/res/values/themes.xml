@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose draws everything; this only sets the window background so app start isn't white. -->
+    <style name="Theme.BetterYTSMusic" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ink</item>
+        <item name="android:colorAccent">@color/gold</item>
+    </style>
+
+    <color name="ink">#050302</color>
+    <color name="gold">#FFC857</color>
+</resources>
