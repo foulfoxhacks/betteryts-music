@@ -402,6 +402,63 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private fun applyQueue(q: QueueState) {
         queue = q
         saveQueue(q)
+        topUpRadio()
+    }
+
+    // ---- Endless radio: YouTube Music's song radio, started on purpose or when the queue runs low ----
+    /** The song the current radio grew from, and where its next page starts. */
+    private var radioSeed: String? = null
+    private var radioNext: String? = null
+    private var radioLoading = false
+    var radioFor by mutableStateOf<String?>(null)
+        private set
+
+    fun startRadio(track: Track) {
+        if (room != null) {
+            message = "Radio isn't available in a room. Add songs to the room queue instead."
+            return
+        }
+        io {
+            val page = Core.radio(track.id)
+            radioSeed = track.id
+            radioNext = page.next
+            radioFor = track.title
+            val tracks = listOf(track) + page.tracks.filter { it.id != track.id }
+            applyQueue(Core.queueSet(tracks, 0, false))
+            playCurrent()
+            message = "Radio: songs like " + track.title
+        }
+    }
+
+    /** With 3 or fewer songs left, adds more like what's playing. */
+    private fun topUpRadio() {
+        val q = queue
+        val current = q.current ?: return
+        if (!pluginOn("radio") || room != null || radioLoading || q.repeat != Repeat.Off) return
+        if (q.tracks.size - 1 - q.position > 3) return
+        radioLoading = true
+        viewModelScope.launch {
+            try {
+                // Continue the radio we're on; otherwise grow a new one from the current song.
+                val page = if (radioSeed != null && radioNext != null) Core.radio(radioSeed!!, radioNext)
+                else Core.radio(current.id).also { radioSeed = current.id; radioFor = current.title }
+                radioNext = page.next
+                val have = queue.tracks.map { it.id }.toSet()
+                val fresh = page.tracks.filter { it.id !in have && !it.live }.distinctBy { it.id }
+                if (fresh.isNotEmpty() && room == null) {
+                    queue = Core.queueAddAll(fresh).also(::saveQueue)
+                    // The queue had already run out: carry on with the first new song.
+                    if (endedId == current.id && queue.current?.id == current.id && !(player?.playing ?: false)) {
+                        applyQueue(Core.queueNext(user = false))
+                        playCurrent()
+                    }
+                }
+            } catch (_: CoreException) {
+                // No radio this time; the queue just ends as before.
+            } finally {
+                radioLoading = false
+            }
+        }
     }
 
     private fun saveQueue(q: QueueState) {
@@ -446,6 +503,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             return
         }
         io {
+            // A new list you chose; when it runs out, radio grows from its last song.
+            radioSeed = null
+            radioNext = null
+            radioFor = null
             applyQueue(Core.queueSet(tracks, start, shuffle))
             playCurrent()
         }
@@ -823,7 +884,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
                 else -> "Late night" to "late night lofi"
             },
             "Lo-fi beats" to "lofi hip hop",
-            "Today's hits" to "top hits this week",
+            "Today's hits" to "top hits this week official music video",
         )
         fillShelves(picks, get = { shelves }, set = { shelves = it })
     }
@@ -875,6 +936,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             size = 20,
         )
     }
+
+    /** "Your mixes": a Supermix from your favourite song, then one per top artist. Each one is a radio. */
+    val mixes: List<Pair<String, Track>>
+        get() {
+            val history = library.history
+            if (history.isEmpty() && library.favorites.isEmpty()) return emptyList()
+            val out = mutableListOf("Supermix" to (library.favorites.firstOrNull() ?: history.first()))
+            recap.take(4).forEach { (artist, _) -> history.firstOrNull { it.artist == artist }?.let { out += "$artist Mix" to it } }
+            return out.distinctBy { it.second.id }
+        }
 
     // ---- Account sheet & recap ----
     var accountOpen by mutableStateOf(false)

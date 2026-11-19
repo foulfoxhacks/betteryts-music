@@ -42,6 +42,13 @@ pub const CATALOG: &[PluginInfo] = &[
 		default_enabled: true,
 	},
 	PluginInfo {
+		id: "radio",
+		name: "Endless radio",
+		description: "When your queue runs low, keep going with songs like the one playing, from YouTube Music's own radio. Adds \"Start radio\" to every song.",
+		category: "Playback",
+		default_enabled: true,
+	},
+	PluginInfo {
 		id: "lyrics",
 		name: "Synced lyrics",
 		description: "Time-synced lyrics from LRCLIB in the player's Lyrics tab. Tap a line to jump to it.",

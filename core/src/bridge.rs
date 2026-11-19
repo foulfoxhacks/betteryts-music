@@ -14,7 +14,7 @@ use crate::library::Store;
 use crate::model::{Artist, Track};
 use crate::queue::Queue;
 use crate::plugins::SettingsStore;
-use crate::{google, links, plugins, queue};
+use crate::{google, links, plugins, queue, radio};
 
 struct State {
 	api: Api,
@@ -85,6 +85,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 		"search" => to_value(api().search(&arg::<String>(a, "query")?, Filter::parse(opt_str(a, "filter").unwrap_or("all")), opt_str(a, "page"))?),
 		"suggest" => to_value(api().suggest(&arg::<String>(a, "query")?)?),
 		"video" => to_value(api().video(&arg::<String>(a, "id")?)?),
+		"radio" => to_value(radio::radio(&arg::<String>(a, "id")?, opt_str(a, "next"), &api().region)?),
 		"playlist" => to_value(api().playlist(&arg::<String>(a, "id")?, opt_str(a, "page"))?),
 		"artist" => to_value(api().artist(&arg::<String>(a, "id")?, opt_str(a, "page"))?),
 		"feed" => {

@@ -127,6 +127,16 @@ fun HomeScreen(vm: AppViewModel, pad: PaddingValues) {
             item { QuickPicks(vm, quickPicks) }
         }
 
+        val mixes = vm.mixes
+        if (mixes.isNotEmpty() && vm.pluginOn("radio")) {
+            shelfHeader("Endless radio, made from your listening", "Your mixes")
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    itemsIndexed(mixes, key = { _, m -> "mix-" + m.second.id }) { i, (name, seed) -> MixCard(name, seed, i) { vm.startRadio(seed) } }
+                }
+            }
+        }
+
         if (lib.history.isNotEmpty()) {
             shelfHeader("Your recent plays", "Listen again")
             item {
@@ -233,7 +243,7 @@ private fun QuickPicks(vm: AppViewModel, tracks: List<Track>) {
                 col.forEachIndexed { r, t ->
                     val index = c * 4 + r
                     Row(
-                        Modifier.fillMaxWidth().clickable { vm.playTracks(tracks, index) }.padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
+                        Modifier.fillMaxWidth().clickable { if (vm.pluginOn("radio")) vm.startRadio(t) else vm.playTracks(tracks, index) }.padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RemoteImage(t.art, Modifier.size(48.dp))
@@ -246,6 +256,33 @@ private fun QuickPicks(vm: AppViewModel, tracks: List<Track>) {
                 }
             }
         }
+    }
+}
+
+/** A mix: the seed song's art under a brand-coloured wash, with the mix name set big on top. */
+@Composable
+private fun MixCard(name: String, seed: Track, index: Int, onClick: () -> Unit) {
+    val wash = listOf(Brand.Gold, Brand.Pink, Brand.Violet, Brand.Ember)[index % 4]
+    Column(Modifier.width(160.dp).clickable(onClick = onClick)) {
+        Box(Modifier.size(160.dp)) {
+            RemoteImage(seed.art, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(wash.copy(alpha = 0.15f), wash.copy(alpha = 0.85f)))))
+            Text(
+                name.removeSuffix(" Mix").uppercase(),
+                Modifier.align(Alignment.BottomStart).padding(10.dp),
+                color = Brand.Ink,
+                fontWeight = FontWeight.Black,
+                fontSize = 20.sp,
+                lineHeight = 21.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Box(Modifier.align(Alignment.TopEnd).padding(8.dp).background(Brand.Ink.copy(alpha = 0.75f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                Text("MIX", color = wash, fontWeight = FontWeight.Black, fontSize = 10.sp)
+            }
+        }
+        Text(name, Modifier.padding(top = 8.dp), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("Radio from " + seed.title, color = Brand.Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

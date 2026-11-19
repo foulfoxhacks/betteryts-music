@@ -40,6 +40,14 @@ object Core {
         return (0 until a.length()).mapNotNull { a.optString(it).takeIf(String::isNotBlank) }
     }
 
+    data class RadioPage(val tracks: List<Track>, val next: String?)
+
+    /** YouTube Music's song radio; pass `next` back for more. */
+    suspend fun radio(id: String, next: String? = null): RadioPage {
+        val o = obj("radio", args("id" to id, "next" to next))
+        return RadioPage(Track.list(o.optJSONArray("tracks")), o.str("next"))
+    }
+
     suspend fun video(id: String) = Track.from(obj("video", args("id" to id))) ?: throw CoreException("Couldn't load that song")
     suspend fun playlist(id: String, page: String? = null) = CollectionPage.from(obj("playlist", args("id" to id, "page" to page)))
     suspend fun artist(id: String, page: String? = null) = ArtistPage.from(obj("artist", args("id" to id, "page" to page)))
