@@ -1,6 +1,8 @@
 //! Client for the BetterYTS API (https://yts.foulfoxhacks.dev/docs).
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -17,6 +19,71 @@ pub struct Api {
 	base: String,
 	agent: ureq::Agent,
 	pub region: String,
+	/// Shared by every clone, so all calls (and the feed's worker threads) reuse responses.
+	cache: Arc<Mutex<ResponseCache>>,
+}
+
+/// Responses kept in memory for as long as the Worker's `Cache-Control: max-age` allows.
+/// The Worker caches the same responses at the edge for that long, so this never shows
+/// anything staler than the server would; it just skips the request. Errors are never cached.
+pub struct ResponseCache {
+	entries: HashMap<String, (Instant, Value)>,
+	capacity: usize,
+}
+
+const CACHE_ENTRIES: usize = 128;
+const CACHE_MAX_TTL_SECS: u64 = 3600;
+
+impl ResponseCache {
+	pub fn new(capacity: usize) -> ResponseCache {
+		ResponseCache { entries: HashMap::new(), capacity }
+	}
+
+	pub fn get(&mut self, url: &str, now: Instant) -> Option<Value> {
+		match self.entries.get(url) {
+			Some((expires, v)) if *expires > now => Some(v.clone()),
+			Some(_) => {
+				self.entries.remove(url);
+				None
+			}
+			None => None,
+		}
+	}
+
+	pub fn put(&mut self, url: String, value: Value, ttl: Duration, now: Instant) {
+		if self.capacity == 0 {
+			return;
+		}
+		if self.entries.len() >= self.capacity && !self.entries.contains_key(&url) {
+			self.entries.retain(|_, (expires, _)| *expires > now);
+			if self.entries.len() >= self.capacity {
+				// Still full: drop whatever expires soonest.
+				if let Some(k) = self.entries.iter().min_by_key(|(_, (e, _))| *e).map(|(k, _)| k.clone()) {
+					self.entries.remove(&k);
+				}
+			}
+		}
+		self.entries.insert(url, (now + ttl, value));
+	}
+
+	pub fn clear(&mut self) {
+		self.entries.clear();
+	}
+
+	pub fn len(&self) -> usize {
+		self.entries.len()
+	}
+}
+
+/// How long a response may be reused, from its `Cache-Control` header. `None` = don't cache.
+pub fn cache_ttl(cache_control: Option<&str>) -> Option<Duration> {
+	let cc = cache_control?.to_ascii_lowercase();
+	let directives: Vec<&str> = cc.split(',').map(str::trim).collect();
+	if directives.iter().any(|d| matches!(*d, "no-store" | "no-cache" | "private")) {
+		return None;
+	}
+	let secs = directives.iter().find_map(|d| d.strip_prefix("max-age=")?.trim().parse::<u64>().ok())?;
+	(secs > 0).then(|| Duration::from_secs(secs.min(CACHE_MAX_TTL_SECS)))
 }
 
 /// What a search should return. "songs" maps to videos, "artists" to channels.
@@ -112,7 +179,12 @@ impl Api {
 			.timeout(Duration::from_secs(25))
 			.user_agent(concat!("BetterYTSMusic/", env!("CARGO_PKG_VERSION"), " (Android)"))
 			.build();
-		Api { base: base.trim_end_matches('/').to_string(), agent, region: String::new() }
+		Api { base: base.trim_end_matches('/').to_string(), agent, region: String::new(), cache: Arc::new(Mutex::new(ResponseCache::new(CACHE_ENTRIES))) }
+	}
+
+	/// Forget cached responses (e.g. after changing region or base URL).
+	pub fn clear_cache(&self) {
+		self.cache.lock().unwrap_or_else(|p| p.into_inner()).clear();
 	}
 
 	pub fn base(&self) -> &str {
@@ -143,10 +215,18 @@ impl Api {
 
 	fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
 		let url = self.url(path, query);
+		if let Some(hit) = self.cache.lock().unwrap_or_else(|p| p.into_inner()).get(&url, Instant::now()) {
+			return Ok(hit);
+		}
 		match self.agent.get(&url).call() {
 			Ok(res) => {
+				let ttl = cache_ttl(res.header("cache-control"));
 				let text = res.into_string().map_err(|e| format!("Couldn't read the response: {e}"))?;
-				serde_json::from_str(&text).map_err(|_| "BetterYTS sent something unexpected. Try again in a moment.".to_string())
+				let value: Value = serde_json::from_str(&text).map_err(|_| "BetterYTS sent something unexpected. Try again in a moment.".to_string())?;
+				if let Some(ttl) = ttl {
+					self.cache.lock().unwrap_or_else(|p| p.into_inner()).put(url, value.clone(), ttl, Instant::now());
+				}
+				Ok(value)
 			}
 			Err(ureq::Error::Status(code, res)) => {
 				// The Worker answers {"error":{"status":…,"message":"…"}}.
@@ -275,6 +355,47 @@ pub fn fmt_duration(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn cache_ttl_follows_the_workers_cache_control() {
+		assert_eq!(cache_ttl(Some("public, max-age=600, s-maxage=600")), Some(Duration::from_secs(600)));
+		assert_eq!(cache_ttl(Some("public, max-age=86400")), Some(Duration::from_secs(CACHE_MAX_TTL_SECS)), "capped at an hour");
+		assert_eq!(cache_ttl(Some("no-store")), None);
+		assert_eq!(cache_ttl(Some("private, max-age=60")), None);
+		assert_eq!(cache_ttl(Some("public, s-maxage=600")), None, "s-maxage is for shared caches only");
+		assert_eq!(cache_ttl(Some("max-age=0")), None);
+		assert_eq!(cache_ttl(None), None);
+	}
+
+	#[test]
+	fn response_cache_expires_and_evicts_soonest_first() {
+		let t0 = Instant::now();
+		let mut c = ResponseCache::new(2);
+		c.put("a".into(), serde_json::json!(1), Duration::from_secs(10), t0);
+		c.put("b".into(), serde_json::json!(2), Duration::from_secs(100), t0);
+		assert_eq!(c.get("a", t0 + Duration::from_secs(5)), Some(serde_json::json!(1)));
+		assert_eq!(c.get("a", t0 + Duration::from_secs(11)), None, "expired entries miss");
+		assert_eq!(c.len(), 1, "and are dropped");
+		c.put("a".into(), serde_json::json!(1), Duration::from_secs(10), t0);
+		c.put("c".into(), serde_json::json!(3), Duration::from_secs(50), t0); // full: evicts "a" (soonest)
+		assert_eq!(c.len(), 2);
+		assert_eq!(c.get("a", t0), None);
+		assert_eq!(c.get("b", t0), Some(serde_json::json!(2)));
+		assert_eq!(c.get("c", t0), Some(serde_json::json!(3)));
+		c.clear();
+		assert_eq!(c.len(), 0);
+	}
+
+	#[test]
+	#[ignore = "live API"]
+	fn live_repeat_requests_are_served_from_the_cache() {
+		let api = Api::new(DEFAULT_BASE);
+		api.search("lofi hip hop", Filter::Songs, None).unwrap();
+		let before = Instant::now();
+		let again = api.clone().search("lofi hip hop", Filter::Songs, None).unwrap();
+		assert!(!again.items.is_empty());
+		assert!(before.elapsed() < Duration::from_millis(50), "second call should not hit the network");
+	}
 
 	#[test]
 	fn builds_urls_with_encoding_and_region() {
