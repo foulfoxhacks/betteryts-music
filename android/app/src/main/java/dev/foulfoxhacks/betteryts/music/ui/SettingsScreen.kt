@@ -97,7 +97,7 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             item { SectionHeader("About") }
             item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("BetterYTS Music by FoulFoxHacks · 0.3.0", color = Brand.Paper, fontWeight = FontWeight.Bold)
+                    Text("BetterYTS Music by FoulFoxHacks · 0.4.0", color = Brand.Paper, fontWeight = FontWeight.Bold)
                     Text("Search and pages come from the BetterYTS API (yts.foulfoxhacks.dev). Songs play through YouTube's official player.", color = Brand.Muted, fontSize = 13.sp)
                     Text("Skip data: SponsorBlock (CC BY-NC-SA 4.0). Dislike counts: Return YouTube Dislike. Lyrics: LRCLIB.", color = Brand.Muted, fontSize = 13.sp)
                 }

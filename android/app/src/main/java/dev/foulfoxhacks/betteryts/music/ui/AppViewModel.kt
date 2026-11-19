@@ -22,6 +22,7 @@ import dev.foulfoxhacks.betteryts.music.core.Item
 import dev.foulfoxhacks.betteryts.music.core.Library
 import dev.foulfoxhacks.betteryts.music.core.Link
 import dev.foulfoxhacks.betteryts.music.core.QueueState
+import dev.foulfoxhacks.betteryts.music.core.Repeat
 import dev.foulfoxhacks.betteryts.music.core.Track
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
 import dev.foulfoxhacks.betteryts.music.together.RoomClient
@@ -31,6 +32,7 @@ import dev.foulfoxhacks.betteryts.music.ui.theme.Palettes
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.util.Locale
 
 enum class Tab { Home, Search, Library }
@@ -118,6 +120,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             Brand.palette = Palettes.byId(settings.theme)
             library = Core.library()
             queue = Core.queueGet()
+            restoreQueue()
         } catch (e: CoreException) {
             message = e.message
         }
@@ -366,6 +369,53 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         return if (total > 0f && saved >= total - 20f) 0f else saved
     }
 
+    /**
+     * Brings the queue back after a cold start. The current song is cued paused at its saved
+     * position, so opening the app never starts audio by itself.
+     */
+    private suspend fun restoreQueue() {
+        if (queue.current != null) return
+        val saved = playPrefs.getString("queue", null)
+            ?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return
+        val tracks = Track.list(saved.optJSONArray("tracks"))
+        if (tracks.isEmpty()) return
+        val position = saved.optInt("position", 0).coerceIn(0, tracks.lastIndex)
+        var q = Core.queueSet(tracks, position, shuffle = false)
+        // The core cycles repeat, so step it to the saved mode.
+        val mode = runCatching { Repeat.valueOf(saved.optString("repeat", "Off")) }.getOrDefault(Repeat.Off)
+        repeat(
+            when (mode) {
+                Repeat.Off -> 0
+                Repeat.All -> 1
+                Repeat.One -> 2
+            }
+        ) { q = Core.queueRepeat() }
+        // The saved list is already in play order, so only re-shuffle what is still ahead.
+        if (saved.optBoolean("shuffle")) q = Core.queueShuffle()
+        applyQueue(q)
+        val t = q.current ?: return
+        if (player?.currentId == null) player?.load(t.id, resumePosition(t), autoplay = false)
+    }
+
+    /** Queue changes go to the screen and to disk, so the next launch can pick up here. */
+    private fun applyQueue(q: QueueState) {
+        queue = q
+        saveQueue(q)
+    }
+
+    private fun saveQueue(q: QueueState) {
+        if (q.tracks.isEmpty()) {
+            playPrefs.edit().remove("queue").apply()
+            return
+        }
+        val saved = JSONObject()
+            .put("tracks", Track.array(q.tracks))
+            .put("position", q.position)
+            .put("shuffle", q.shuffle)
+            .put("repeat", q.repeat.name)
+        playPrefs.edit().putString("queue", saved.toString()).apply()
+    }
+
     /** Saved speed applies to every song, now and after a restart. */
     fun chooseSpeed(rate: Float) {
         val v = rate.coerceIn(0.5f, 2f)
@@ -395,7 +445,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             return
         }
         io {
-            queue = Core.queueSet(tracks, start, shuffle)
+            applyQueue(Core.queueSet(tracks, start, shuffle))
             playCurrent()
         }
     }
@@ -430,7 +480,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun nextLocal() = io {
         val q = Core.queueNext(user = true)
-        queue = q
+        applyQueue(q)
         if (!q.ended) playCurrent()
     }
 
@@ -445,7 +495,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             return
         }
         io {
-            queue = Core.queuePrevious()
+            applyQueue(Core.queuePrevious())
             playCurrent()
         }
     }
@@ -460,7 +510,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     private fun jumpLocal(position: Int) = io {
-        queue = Core.queueJump(position)
+        applyQueue(Core.queueJump(position))
         playCurrent()
     }
 
@@ -471,7 +521,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun playNextLocal(track: Track) = io {
         val wasEmpty = queue.current == null
-        queue = Core.queuePlayNext(track)
+        applyQueue(Core.queuePlayNext(track))
         if (wasEmpty) playCurrent() else message = "Playing next: ${track.title}"
     }
 
@@ -485,7 +535,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun addLocal(track: Track) = io {
         val wasEmpty = queue.current == null
-        queue = Core.queueAdd(track)
+        applyQueue(Core.queueAdd(track))
         if (wasEmpty) playCurrent() else message = "Added to queue"
     }
 
@@ -500,7 +550,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun addAllLocal(tracks: List<Track>) = io {
         val wasEmpty = queue.current == null
-        queue = Core.queueAddAll(tracks)
+        applyQueue(Core.queueAddAll(tracks))
         if (wasEmpty) playCurrent() else message = "Added ${tracks.size} songs to the queue"
     }
 
@@ -514,7 +564,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun removeLocal(position: Int) = io {
         val before = queue.current?.id
-        queue = Core.queueRemove(position)
+        applyQueue(Core.queueRemove(position))
         if (queue.current?.id != before) {
             if (queue.current == null) player?.pause() else playCurrent()
         }
@@ -526,15 +576,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun moveInQueue(from: Int, to: Int) {
-        if (notInRoom("Reordering")) io { queue = Core.queueMove(from, to) }
+        if (notInRoom("Reordering")) io { applyQueue(Core.queueMove(from, to)) }
     }
 
     fun toggleShuffle() {
-        if (notInRoom("Shuffle")) io { queue = Core.queueShuffle() }
+        if (notInRoom("Shuffle")) io { applyQueue(Core.queueShuffle()) }
     }
 
     fun cycleRepeat() {
-        if (notInRoom("Repeat")) io { queue = Core.queueRepeat() }
+        if (notInRoom("Repeat")) io { applyQueue(Core.queueRepeat()) }
     }
 
     fun seek(seconds: Float) {
@@ -567,7 +617,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
         io {
             val q = Core.queueNext(user = false)
-            queue = q
+            applyQueue(q)
             if (!q.ended) playCurrent()
         }
     }

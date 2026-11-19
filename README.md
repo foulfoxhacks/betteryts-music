@@ -27,7 +27,8 @@ scripts/    build-core.ps1 cross-compiles core/ into android/app/src/main/jniLib
   BetterYTS website plays videos. One WebView moves between the mini player, the full player and
   picture-in-picture, so songs never reload when you move it. Playback speed (0.5×–2×) is in the
   full player's top bar, and songs resume where you left off (per song, on the phone; the
-  Settings → Playback switch turns it off).
+  Settings → Playback switch turns it off). Closing the app keeps the queue: the next launch
+  brings back the same songs, cued paused at the right spot.
 
 ### Playback rules (YouTube's embedded-player terms)
 
