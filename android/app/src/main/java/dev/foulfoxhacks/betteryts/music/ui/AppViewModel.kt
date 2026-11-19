@@ -947,6 +947,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             return out.distinctBy { it.second.id }
         }
 
+    /** Library chip: all, songs, playlists, artists or history. */
+    var libraryTab by mutableStateOf("all")
+
     // ---- Account sheet & recap ----
     var accountOpen by mutableStateOf(false)
 

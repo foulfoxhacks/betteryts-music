@@ -15,8 +15,8 @@ android {
         applicationId = "dev.foulfoxhacks.betteryts.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 7
+        versionName = "0.7.0"
         // Built by ../scripts/build-core.ps1 into src/main/jniLibs.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }

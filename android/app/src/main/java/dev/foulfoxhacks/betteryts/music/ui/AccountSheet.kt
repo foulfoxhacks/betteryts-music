@@ -98,8 +98,8 @@ fun AccountSheet(vm: AppViewModel) {
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(Brand.Line))
 
-            SheetRow(AppIcons.Library, "Your library") { close(); vm.selectTab(Tab.Library) }
-            SheetRow(AppIcons.History, "History") { close(); vm.selectTab(Tab.Library) }
+            SheetRow(AppIcons.Library, "Your library") { close(); vm.libraryTab = "all"; vm.selectTab(Tab.Library) }
+            SheetRow(AppIcons.History, "History") { close(); vm.libraryTab = "history"; vm.selectTab(Tab.Library) }
             SheetRow(AppIcons.Recap, "Your recap") { showRecap = !showRecap }
             if (showRecap) Recap(vm)
             if (vm.pluginOn("together")) {

@@ -1,20 +1,27 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,18 +30,32 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.foulfoxhacks.betteryts.music.core.Track
+import dev.foulfoxhacks.betteryts.music.core.UserPlaylist
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
 
-private val TABS = listOf("favorites" to "Favorites", "playlists" to "Playlists", "history" to "History", "artists" to "Artists")
+/** YouTube Music's library chips, plus History (theirs hides it in the account menu). */
+private val TABS = listOf("all" to "All", "songs" to "Songs", "playlists" to "Playlists", "artists" to "Artists", "history" to "History")
 
 @Composable
 fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
-    var tab by rememberSaveable { mutableStateOf("favorites") }
+    val tab = vm.libraryTab
+    var filter by rememberSaveable { mutableStateOf("") }
+    var az by rememberSaveable { mutableStateOf(false) }
     val lib = vm.library
+    val q = filter.trim()
+
+    fun Track.matches() = q.isEmpty() || title.contains(q, true) || artist.contains(q, true)
+    val songs = lib.favorites.filter { it.matches() }.let { if (az) it.sortedBy { t -> t.title.lowercase() } else it }
+    val playlists = lib.playlists.filter { q.isEmpty() || it.name.contains(q, true) }.let { if (az) it.sortedBy { p -> p.name.lowercase() } else it }
+    val artists = lib.followed.filter { q.isEmpty() || it.name.contains(q, true) }.let { if (az) it.sortedBy { a -> a.name.lowercase() } else it }
+    val history = lib.history.filter { it.matches() }
+
     LazyColumn(Modifier.fillMaxSize(), contentPadding = pad) {
         item {
             Column(Modifier.padding(16.dp)) {
@@ -43,55 +64,135 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                 DisplayTitle("Your library", size = 44)
             }
         }
-        item { GoogleCard(vm) }
         item {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(TABS) { (key, label) -> Chip(label, tab == key) { tab = key } }
+                items(TABS) { (key, label) -> Chip(label, tab == key) { vm.libraryTab = key } }
             }
-            Spacer(Modifier.height(12.dp))
+        }
+        if (!lib.isEmpty) {
+            item {
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        filter,
+                        { filter = it },
+                        Modifier.weight(1f),
+                        placeholder = { Text("Search your library", color = Brand.Muted) },
+                        leadingIcon = { Icon(AppIcons.Search, null, tint = Brand.Muted) },
+                        trailingIcon = if (filter.isNotEmpty()) ({ Icon(AppIcons.Close, "Clear", Modifier.clickable { filter = "" }, tint = Brand.Muted) }) else null,
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Brand.Gold,
+                            unfocusedBorderColor = Brand.Line,
+                            cursorColor = Brand.Gold,
+                            focusedTextColor = Brand.Paper,
+                            unfocusedTextColor = Brand.Paper,
+                        ),
+                    )
+                    if (tab != "history") {
+                        Text(
+                            if (az) "A–Z" else "RECENT",
+                            Modifier.clickable { az = !az }.padding(horizontal = 12.dp, vertical = 14.dp),
+                            color = Brand.Gold,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
         }
 
         when (tab) {
-            "favorites" -> {
-                if (lib.favorites.isEmpty()) {
-                    item { EmptyNote("No favorites yet", "Tap ⋮ on any song and choose Add to favorites, or ♡ in the player.") }
+            "all" -> allView(vm, songs, playlists, history, q.isEmpty())
+
+            "songs" -> {
+                if (songs.isEmpty()) {
+                    item { EmptyNote(if (q.isEmpty()) "No liked songs yet" else "No matches", if (q.isEmpty()) "Tap ♡ in the player, or ⋮ → Add to favorites on any song." else "Nothing in your liked songs matches \"$q\".") }
                 } else {
-                    item { PlayShuffle(onPlay = { vm.playTracks(lib.favorites, 0) }, onShuffle = { vm.playTracks(lib.favorites, 0, shuffle = true) }) }
-                    itemsIndexed(lib.favorites, key = { _, t -> "fav-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(lib.favorites, i) }) }
+                    item { PlayShuffle(onPlay = { vm.playTracks(songs, 0) }, onShuffle = { vm.playTracks(songs, 0, shuffle = true) }) }
+                    itemsIndexed(songs, key = { _, t -> "fav-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(songs, i) }) }
                 }
             }
 
             "playlists" -> {
                 item { BrandButton("New playlist", { vm.newPlaylistWith = emptyList() }, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), primary = true, icon = AppIcons.Add) }
-                if (lib.playlists.isEmpty()) {
-                    item { EmptyNote("No playlists yet", "Create one here, or save a YouTube playlist from its page.") }
+                if (playlists.isEmpty()) {
+                    item { EmptyNote(if (q.isEmpty()) "No playlists yet" else "No matches", "Create one here, save a YouTube playlist from its page, or import yours from YouTube.") }
                 }
-                items(lib.playlists, key = { "pl-" + it.id }) { p ->
-                    Row(Modifier.fillMaxWidth().clickable { vm.openUserPlaylist(p.id) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RemoteImage(p.tracks.firstOrNull()?.art, Modifier.size(64.dp))
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text(p.name, color = Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(listOfNotNull(if (p.fromYouTube) "From YouTube" else null, "${p.tracks.size} song${if (p.tracks.size == 1) "" else "s"}").joinToString(" · "), color = Brand.Muted, fontSize = 13.sp)
-                        }
-                    }
-                }
+                items(playlists, key = { "pl-" + it.id }) { p -> PlaylistRow(vm, p) }
             }
 
             "history" -> {
-                if (lib.history.isEmpty()) {
-                    item { EmptyNote("Nothing played yet", "Songs you play show up here.") }
+                if (history.isEmpty()) {
+                    item { EmptyNote(if (q.isEmpty()) "Nothing played yet" else "No matches", "Songs you play show up here.") }
                 } else {
-                    item { BrandButton("Clear history", { vm.clearHistory() }, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), icon = AppIcons.Delete) }
-                    itemsIndexed(lib.history, key = { _, t -> "h-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(lib.history, i) }) }
+                    if (q.isEmpty()) item { BrandButton("Clear history", { vm.clearHistory() }, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), icon = AppIcons.Delete) }
+                    itemsIndexed(history, key = { _, t -> "h-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(history, i) }) }
                 }
             }
 
             else -> {
-                if (lib.followed.isEmpty()) {
-                    item { EmptyNote("Not following anyone", "Open an artist and tap Follow. Their new songs show up on Home.") }
+                if (artists.isEmpty()) {
+                    item { EmptyNote(if (q.isEmpty()) "Not following anyone" else "No matches", "Open an artist and tap Follow. Their new songs show up on Home.") }
                 }
-                items(lib.followed, key = { "a-" + it.id }) { a -> ArtistRow(a) { vm.openArtist(a.id, a.name) } }
+                items(artists, key = { "a-" + it.id }) { a -> ArtistRow(a) { vm.openArtist(a.id, a.name) } }
             }
+        }
+        item { Spacer(Modifier.height(8.dp)); GoogleCard(vm) }
+    }
+}
+
+/** "All": recently played grid, then Liked songs and your playlists as one list, YouTube Music style. */
+private fun LazyListScope.allView(vm: AppViewModel, songs: List<Track>, playlists: List<UserPlaylist>, history: List<Track>, unfiltered: Boolean) {
+    val recent = history.take(6)
+    if (recent.isNotEmpty()) {
+        item { SectionHeader("Recently played", Modifier.padding(top = 4.dp), action = if (unfiltered) "See all" else null) { vm.libraryTab = "history" } }
+        recent.chunked(3).forEach { row ->
+            item {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { t ->
+                        Column(Modifier.weight(1f).clickable { vm.playTracks(history, history.indexOf(t)) }) {
+                            RemoteImage(t.art, Modifier.fillMaxWidth().aspectRatio(1f))
+                            Text(t.title, Modifier.padding(top = 6.dp), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(t.artist, color = Brand.Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+    item { Spacer(Modifier.height(10.dp)) }
+    if (unfiltered || songs.isNotEmpty()) item { LikedSongsRow(vm, songs) }
+    items(playlists, key = { "all-pl-" + it.id }) { p -> PlaylistRow(vm, p) }
+    if (!unfiltered && songs.isNotEmpty()) {
+        itemsIndexed(songs, key = { _, t -> "all-fav-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(songs, i) }) }
+    }
+}
+
+/** The pinned "Liked songs" auto-playlist, with a brand-gradient tile instead of art. */
+@Composable
+private fun LikedSongsRow(vm: AppViewModel, songs: List<Track>) {
+    Row(Modifier.fillMaxWidth().clickable { vm.libraryTab = "songs" }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(64.dp).background(Brush.linearGradient(listOf(Brand.Pink, Brand.Violet))), contentAlignment = Alignment.Center) {
+            Icon(AppIcons.Favorite, null, Modifier.size(30.dp), tint = Brand.Paper)
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text("Liked songs", color = Brand.Paper, fontWeight = FontWeight.Bold)
+            Text("Auto playlist · ${songs.size} song${if (songs.size == 1) "" else "s"}", color = Brand.Muted, fontSize = 13.sp)
+        }
+        if (songs.isNotEmpty()) {
+            Text("SHUFFLE", Modifier.clickable { vm.playTracks(songs, 0, shuffle = true) }.padding(8.dp), color = Brand.Gold, fontWeight = FontWeight.Black, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun PlaylistRow(vm: AppViewModel, p: UserPlaylist) {
+    Row(Modifier.fillMaxWidth().clickable { vm.openUserPlaylist(p.id) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        RemoteImage(p.tracks.firstOrNull()?.art, Modifier.size(64.dp))
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(p.name, color = Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(listOfNotNull("Playlist", if (p.fromYouTube) "From YouTube" else null, "${p.tracks.size} song${if (p.tracks.size == 1) "" else "s"}").joinToString(" · "), color = Brand.Muted, fontSize = 13.sp)
         }
     }
 }
