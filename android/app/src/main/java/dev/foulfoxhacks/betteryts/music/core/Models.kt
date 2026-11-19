@@ -30,6 +30,9 @@ data class Track(
     /** Cover art. YouTube's 320×180 thumbnail always exists; the UI crops it square. */
     val art: String get() = thumbnail ?: "https://i.ytimg.com/vi/$id/mqdefault.jpg"
 
+    /** A song stored on this phone, played offline by the native player. */
+    val isLocal: Boolean get() = id.startsWith("local:")
+
     /** Bigger art for the player screen. */
     val largeArt: String get() = thumbnail ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"
 

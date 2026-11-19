@@ -172,7 +172,7 @@ fun TrackMenuButton(vm: AppViewModel, track: Track, extraActions: List<Pair<Stri
         IconButton(onClick = { open = true }) { Icon(AppIcons.More, "More options for ${track.title}", tint = Brand.Muted) }
         DropdownMenu(open, onDismissRequest = { open = false }, containerColor = Brand.Raised) {
             val close = { open = false }
-            if (vm.pluginOn("radio")) MenuItem("Start radio", close) { vm.startRadio(track) }
+            if (vm.pluginOn("radio") && !track.isLocal) MenuItem("Start radio", close) { vm.startRadio(track) }
             MenuItem("Play next", close) { vm.playNext(track) }
             MenuItem("Add to queue", close) { vm.addToQueue(track) }
             MenuItem(if (vm.library.isFavorite(track.id)) "Remove from favorites" else "Add to favorites", close) { vm.toggleFavorite(track) }

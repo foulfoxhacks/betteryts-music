@@ -27,6 +27,7 @@ import dev.foulfoxhacks.betteryts.music.player.PlaybackHub
 import dev.foulfoxhacks.betteryts.music.player.PlaybackService
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
 import dev.foulfoxhacks.betteryts.music.ui.App
+import dev.foulfoxhacks.betteryts.music.ui.ImageCache
 import dev.foulfoxhacks.betteryts.music.ui.AppViewModel
 import dev.foulfoxhacks.betteryts.music.ui.theme.BetterYTSTheme
 
@@ -61,6 +62,7 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         Log.i("BTMActivity", "onCreate (restored=${savedInstanceState != null})")
+        ImageCache.context = applicationContext
         player = PlayerController(this)
         vm.attach(player)
         // Notification, lock-screen, headset and car buttons (Background play).

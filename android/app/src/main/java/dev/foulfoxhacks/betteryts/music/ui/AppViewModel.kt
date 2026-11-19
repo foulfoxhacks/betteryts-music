@@ -24,6 +24,7 @@ import dev.foulfoxhacks.betteryts.music.core.Link
 import dev.foulfoxhacks.betteryts.music.core.QueueState
 import dev.foulfoxhacks.betteryts.music.core.Repeat
 import dev.foulfoxhacks.betteryts.music.core.Track
+import dev.foulfoxhacks.betteryts.music.device.DeviceMusic
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
 import dev.foulfoxhacks.betteryts.music.together.RoomClient
 import dev.foulfoxhacks.betteryts.music.together.RoomState
@@ -414,6 +415,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         private set
 
     fun startRadio(track: Track) {
+        if (track.isLocal) {
+            message = "Radio comes from YouTube Music, so it needs a YouTube song."
+            return
+        }
         if (room != null) {
             message = "Radio isn't available in a room. Add songs to the room queue instead."
             return
@@ -435,6 +440,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         val q = queue
         val current = q.current ?: return
         if (!pluginOn("radio") || room != null || radioLoading || q.repeat != Repeat.Off) return
+        // A list of device files ends where it ends, unless it's already riding a radio.
+        if (current.isLocal && radioSeed == null) return
         if (q.tracks.size - 1 - q.position > 3) return
         radioLoading = true
         viewModelScope.launch {
@@ -499,6 +506,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         if (tracks.isEmpty()) return
         if (room != null) {
             val t = tracks[start.coerceIn(0, tracks.lastIndex)]
+            if (t.isLocal) {
+                message = "Songs on your phone can't be shared to a room."
+                return
+            }
             if (roomSend("load", "video" to room!!.video(t.id, t.title))) message = "Playing for everyone: ${t.title}"
             return
         }
@@ -588,6 +599,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun addToQueue(track: Track) {
+        if (room != null && track.isLocal) {
+            message = "Songs on your phone can't be shared to a room."
+            return
+        }
         if (room != null) {
             if (roomSend("queue_add", "video" to room!!.video(track.id, track.title))) message = "Added to the room's queue"
             return
@@ -603,7 +618,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun addAllToQueue(tracks: List<Track>) {
         if (room != null) {
-            if (canControlRoom()) tracks.take(50).forEach { t -> room!!.send("queue_add", "video" to room!!.video(t.id, t.title)) }
+            if (canControlRoom()) tracks.filterNot { it.isLocal }.take(50).forEach { t -> room!!.send("queue_add", "video" to room!!.video(t.id, t.title)) }
             message = "Added ${minOf(tracks.size, 50)} songs to the room's queue"
             return
         }
@@ -685,6 +700,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     override fun onError(id: String?, code: Int) {
+        // Access to the phone's music was taken away: every device song would fail the same
+        // way, so stop here instead of skipping through all of them.
+        if (DeviceMusic.isLocal(id) && !DeviceMusic.hasPermission(getApplication())) {
+            deviceSongs = null
+            message = "BetterYTS Music can't read your music anymore. Allow access in Library → On this phone."
+            return
+        }
         message = PlayerController.describe(code)
         // In a room, one member's player failing mustn't skip the song for everyone.
         if (room != null) {
@@ -777,6 +799,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private fun onTrackChanged(t: Track) {
         skippedUntil = 0f
         dislikes = null
+        // SponsorBlock and dislike counts are YouTube data; device files have neither.
+        if (t.isLocal) return
         if (pluginOn("sponsorblock") && t.id !in segmentsFor) {
             viewModelScope.launch {
                 segmentsFor[t.id] = try { Core.segments(t.id) } catch (_: CoreException) { emptyList() }
@@ -940,14 +964,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     /** "Your mixes": a Supermix from your favourite song, then one per top artist. Each one is a radio. */
     val mixes: List<Pair<String, Track>>
         get() {
-            val history = library.history
-            if (history.isEmpty() && library.favorites.isEmpty()) return emptyList()
-            val out = mutableListOf("Supermix" to (library.favorites.firstOrNull() ?: history.first()))
+            // Radio needs YouTube songs, so mixes grow from those only.
+            val history = library.history.filterNot { it.isLocal }
+            val favorites = library.favorites.filterNot { it.isLocal }
+            if (history.isEmpty() && favorites.isEmpty()) return emptyList()
+            val out = mutableListOf("Supermix" to (favorites.firstOrNull() ?: history.first()))
             recap.take(4).forEach { (artist, _) -> history.firstOrNull { it.artist == artist }?.let { out += "$artist Mix" to it } }
             return out.distinctBy { it.second.id }
         }
 
-    /** Library chip: all, songs, playlists, artists or history. */
+    // ---- Device files: music stored on the phone, played offline ----
+    var deviceSongs by mutableStateOf<Load<List<Track>>?>(null)
+        private set
+
+    /** Reads the phone's music (needs the audio permission); null until first asked. */
+    fun loadDeviceSongs() {
+        val ctx = getApplication<Application>()
+        if (!DeviceMusic.hasPermission(ctx)) {
+            deviceSongs = null
+            return
+        }
+        deviceSongs = Load.Loading
+        viewModelScope.launch {
+            deviceSongs = try {
+                Load.Ready(DeviceMusic.scan(ctx))
+            } catch (e: Exception) {
+                Load.Failed(e.message ?: "Couldn't read the music on this phone")
+            }
+        }
+    }
+
+    /** Library chip: all, songs, playlists, artists, device or history. */
     var libraryTab by mutableStateOf("all")
 
     // ---- Account sheet & recap ----

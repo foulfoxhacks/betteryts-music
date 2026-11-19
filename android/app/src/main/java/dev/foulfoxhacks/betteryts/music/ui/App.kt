@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -107,6 +108,12 @@ fun App(vm: AppViewModel, player: PlayerController) {
                 },
                 modifier = Modifier.offset(x, y).size(w, h),
             )
+            // Device files have no video: show their cover art in the video's place.
+            if (current.isLocal) {
+                Box(Modifier.offset(x, y).size(w, h).background(Brand.Ink), contentAlignment = Alignment.Center) {
+                    RemoteImage(current.largeArt, Modifier.fillMaxHeight().aspectRatio(1f))
+                }
+            }
             // Taps on the video: open the player when it's small, play/pause when it's big.
             if (!pip) {
                 Box(Modifier.offset(x, y).size(w, h).clickable { if (expanded) vm.togglePlay() else vm.playerExpanded = true })

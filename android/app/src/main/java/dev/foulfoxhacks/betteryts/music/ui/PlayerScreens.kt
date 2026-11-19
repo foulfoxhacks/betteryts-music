@@ -243,7 +243,7 @@ private fun PlayerTopBar(vm: AppViewModel, track: Track) {
                     DropdownMenuItem(text = { Text("Join a room…", color = Brand.Paper) }, onClick = { menu = false; vm.joinRoomDialog = true })
                 }
                 if (track.artistId != null) DropdownMenuItem(text = { Text("Go to artist", color = Brand.Paper) }, onClick = { menu = false; vm.openArtist(track.artistId, track.artist) })
-                if (vm.pluginOn("vrchat")) {
+                if (vm.pluginOn("vrchat") && !track.isLocal) {
                     DropdownMenuItem(
                         text = { Text("Copy VRChat link", color = Brand.Paper) },
                         leadingIcon = { Icon(AppIcons.Headset, null, tint = Brand.Gold) },

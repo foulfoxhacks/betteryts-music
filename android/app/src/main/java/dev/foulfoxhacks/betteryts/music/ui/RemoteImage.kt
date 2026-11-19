@@ -24,6 +24,9 @@ import java.net.URL
 
 /** Thumbnails: downloaded once, downscaled, kept in a memory cache sized to the device. */
 object ImageCache {
+    /** Set by the activity; needed for device-file cover art (content:// URIs). */
+    var context: android.content.Context? = null
+
     private const val MAX_SIDE = 720
     private val cache = object : LruCache<String, ImageBitmap>((Runtime.getRuntime().maxMemory() / 8).toInt()) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
@@ -33,6 +36,10 @@ object ImageCache {
 
     suspend fun load(url: String): ImageBitmap? = cache.get(url) ?: withContext(Dispatchers.IO) {
         runCatching {
+            if (url.startsWith("content://")) {
+                val ctx = context ?: return@runCatching null
+                return@runCatching dev.foulfoxhacks.betteryts.music.device.DeviceMusic.art(ctx, url)?.asImageBitmap()
+            }
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 10_000
                 readTimeout = 15_000

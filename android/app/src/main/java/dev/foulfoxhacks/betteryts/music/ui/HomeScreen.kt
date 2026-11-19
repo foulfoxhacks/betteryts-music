@@ -243,7 +243,7 @@ private fun QuickPicks(vm: AppViewModel, tracks: List<Track>) {
                 col.forEachIndexed { r, t ->
                     val index = c * 4 + r
                     Row(
-                        Modifier.fillMaxWidth().clickable { if (vm.pluginOn("radio")) vm.startRadio(t) else vm.playTracks(tracks, index) }.padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
+                        Modifier.fillMaxWidth().clickable { if (vm.pluginOn("radio") && !t.isLocal) vm.startRadio(t) else vm.playTracks(tracks, index) }.padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RemoteImage(t.art, Modifier.size(48.dp))

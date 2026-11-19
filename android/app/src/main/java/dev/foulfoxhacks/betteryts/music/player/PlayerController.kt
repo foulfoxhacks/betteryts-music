@@ -16,7 +16,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.webkit.WebViewCompat
+import dev.foulfoxhacks.betteryts.music.device.DeviceMusic
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
 
@@ -25,8 +32,12 @@ import org.json.JSONObject
  * WebView. The player stays visible: when the app is hidden, playback pauses (unless the
  * activity is in picture-in-picture, where the window is still visible), as YouTube's
  * embedded-player terms require.
+ *
+ * Songs stored on the phone ("local:" ids) play through a native Media3 ExoPlayer instead;
+ * callers don't need to know which one is playing.
  */
 class PlayerController(context: Context) {
+    private val appContext = context.applicationContext
     interface Listener {
         fun onStartedPlaying(id: String)
         fun onEnded(id: String)
@@ -60,6 +71,67 @@ class PlayerController(context: Context) {
 
     private var startedFor: String? = null
     private val main = Handler(Looper.getMainLooper())
+
+    // ---- Native player for device files ----
+    /** True while the current song is a device file played by ExoPlayer. */
+    private var local = false
+    private var exoPlayer: ExoPlayer? = null
+
+    private fun exo(): ExoPlayer = exoPlayer ?: ExoPlayer.Builder(appContext)
+        .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
+        .setHandleAudioBecomingNoisy(true)
+        .setWakeMode(C.WAKE_MODE_LOCAL)
+        .build()
+        .also {
+            it.addListener(exoListener)
+            exoPlayer = it
+        }
+
+    private val exoListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (!local) return
+            val p = exoPlayer ?: return
+            playing = isPlaying || (p.playWhenReady && p.playbackState == Player.STATE_BUFFERING)
+            val id = currentId
+            if (isPlaying && id != null && startedFor != id) {
+                startedFor = id
+                listener?.onStartedPlaying(id)
+            }
+        }
+
+        override fun onPlaybackStateChanged(state: Int) {
+            if (!local) return
+            val p = exoPlayer ?: return
+            buffering = state == Player.STATE_BUFFERING
+            if (p.duration != C.TIME_UNSET) duration = p.duration / 1000f
+            if (state == Player.STATE_ENDED) {
+                playing = false
+                currentId?.let { listener?.onEnded(it) }
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            if (!local) return
+            Log.w(TAG, "native player error for $currentId", error)
+            playing = false
+            listener?.onError(currentId, FILE_ERROR)
+        }
+    }
+
+    /** Position updates for the native player, twice a second like the embed's. */
+    private val ticker = object : Runnable {
+        override fun run() {
+            val p = exoPlayer
+            if (!local || p == null) return
+            val seconds = p.currentPosition / 1000f
+            if (p.duration != C.TIME_UNSET) duration = p.duration / 1000f
+            if (!seeking) {
+                position = seconds
+                currentId?.let { listener?.onProgress(it, seconds, duration) }
+            }
+            main.postDelayed(this, 500)
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     /**
@@ -117,22 +189,48 @@ class PlayerController(context: Context) {
         position = startSeconds
         duration = 0f
         startedFor = null
+        main.removeCallbacks(ticker)
+        if (DeviceMusic.isLocal(id)) {
+            // Silence the embed first; the two players never play at once.
+            if (!local) js("pause()")
+            local = true
+            playing = false
+            val p = exo()
+            p.setMediaItem(MediaItem.fromUri(DeviceMusic.uri(id)), (startSeconds * 1000).toLong())
+            p.setPlaybackSpeed(speed)
+            p.playWhenReady = autoplay
+            p.prepare()
+            main.post(ticker)
+            return
+        }
+        if (local) {
+            local = false
+            exoPlayer?.stop()
+            playing = false
+        }
         js("load(${JSONObject.quote(id)}, $startSeconds, $autoplay)")
         js("speed($speed)")
     }
 
-    fun play() = js("play()")
-    fun pause() = js("pause()")
+    fun play() {
+        if (local) exoPlayer?.play() else js("play()")
+    }
+
+    fun pause() {
+        if (local) exoPlayer?.pause() else js("pause()")
+    }
+
     fun toggle() = if (playing) pause() else play()
 
     fun seek(seconds: Float) {
         position = seconds
-        js("seek($seconds)")
+        if (local) exoPlayer?.seekTo((seconds * 1000).toLong()) else js("seek($seconds)")
     }
 
     fun applySpeed(rate: Float) {
         speed = rate
         Log.i(TAG, "speed $rate")
+        exoPlayer?.setPlaybackSpeed(rate)
         js("speed($rate)")
     }
 
@@ -161,6 +259,9 @@ class PlayerController(context: Context) {
 
     fun destroy() {
         listener = null
+        main.removeCallbacks(ticker)
+        exoPlayer?.release()
+        exoPlayer = null
         webView.destroy()
     }
 
@@ -176,6 +277,8 @@ class PlayerController(context: Context) {
 
         @JavascriptInterface
         fun onState(state: Int) = main.post {
+            // The embed sits paused while a device file plays; its reports aren't about this song.
+            if (local) return@post
             Log.d(TAG, "state $state for $currentId")
             // -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
             playing = state == 1 || state == 3
@@ -190,12 +293,14 @@ class PlayerController(context: Context) {
 
         @JavascriptInterface
         fun onError(code: Int) = main.post {
+            if (local) return@post
             Log.w(TAG, "player error $code for $currentId")
             listener?.onError(currentId, code)
         }
 
         @JavascriptInterface
         fun onTime(seconds: Double, total: Double) = main.post {
+            if (local) return@post
             if (!seeking) position = seconds.toFloat()
             if (total > 0) duration = total.toFloat()
             currentId?.let { if (!seeking) listener?.onProgress(it, seconds.toFloat(), duration) }
@@ -204,6 +309,9 @@ class PlayerController(context: Context) {
 
     companion object {
         private const val TAG = "BTMPlayer"
+
+        /** Native player failure on a device file (not a YouTube code). */
+        const val FILE_ERROR = 9001
 
         /** Injected into YouTube's embed frames: the page always looks visible and focused. */
         private val VISIBILITY_SHIM = """
@@ -230,6 +338,7 @@ class PlayerController(context: Context) {
             100 -> "That song was removed or made private."
             101, 150 -> "The uploader doesn't allow this song in other apps. Skipping."
             152, 153 -> "YouTube refused to load the player. Skipping."
+            FILE_ERROR -> "That file is missing or can't be played. Skipping."
             else -> "Couldn't play that song (error $code). Skipping."
         }
     }

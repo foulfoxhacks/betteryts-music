@@ -1,5 +1,7 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -37,10 +40,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.foulfoxhacks.betteryts.music.core.Track
 import dev.foulfoxhacks.betteryts.music.core.UserPlaylist
+import dev.foulfoxhacks.betteryts.music.device.DeviceMusic
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
 
 /** YouTube Music's library chips, plus History (theirs hides it in the account menu). */
-private val TABS = listOf("all" to "All", "songs" to "Songs", "playlists" to "Playlists", "artists" to "Artists", "history" to "History")
+private val TABS = listOf("all" to "All", "songs" to "Songs", "playlists" to "Playlists", "artists" to "Artists", "device" to "On this phone", "history" to "History")
 
 @Composable
 fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
@@ -55,6 +59,11 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
     val playlists = lib.playlists.filter { q.isEmpty() || it.name.contains(q, true) }.let { if (az) it.sortedBy { p -> p.name.lowercase() } else it }
     val artists = lib.followed.filter { q.isEmpty() || it.name.contains(q, true) }.let { if (az) it.sortedBy { a -> a.name.lowercase() } else it }
     val history = lib.history.filter { it.matches() }
+    val device = (vm.deviceSongs as? Load.Ready)?.value.orEmpty().filter { it.matches() }
+    val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.loadDeviceSongs() else vm.message = "BetterYTS Music needs that permission to see the music on your phone."
+    }
+    LaunchedEffect(tab) { if (tab == "device" && vm.deviceSongs == null) vm.loadDeviceSongs() }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = pad) {
         item {
@@ -69,7 +78,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                 items(TABS) { (key, label) -> Chip(label, tab == key) { vm.libraryTab = key } }
             }
         }
-        if (!lib.isEmpty) {
+        if (!lib.isEmpty || tab == "device") {
             item {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
@@ -119,6 +128,23 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                     item { EmptyNote(if (q.isEmpty()) "No playlists yet" else "No matches", "Create one here, save a YouTube playlist from its page, or import yours from YouTube.") }
                 }
                 items(playlists, key = { "pl-" + it.id }) { p -> PlaylistRow(vm, p) }
+            }
+
+            "device" -> when (val d = vm.deviceSongs) {
+                null -> item {
+                    Column(Modifier.padding(16.dp)) {
+                        EmptyNote("Your own music, offline", "Play the songs stored on this phone (MP3, FLAC, M4A, Opus…) with the same queue, lock-screen controls, sleep timer and lyrics. Nothing leaves the phone.")
+                        BrandButton("Allow access to music", { askPermission.launch(DeviceMusic.permission) }, Modifier.padding(top = 8.dp), primary = true, icon = AppIcons.Library)
+                    }
+                }
+                Load.Loading -> item { Loading() }
+                is Load.Failed -> item { ErrorBox(d.message) { vm.loadDeviceSongs() } }
+                is Load.Ready -> if (device.isEmpty()) {
+                    item { EmptyNote(if (q.isEmpty()) "No music on this phone" else "No matches", if (q.isEmpty()) "Copy songs into the Music folder and they show up here." else "No song on this phone matches \"$q\".") }
+                } else {
+                    item { PlayShuffle(onPlay = { vm.playTracks(device, 0) }, onShuffle = { vm.playTracks(device, 0, shuffle = true) }, extra = { BrandButton("Rescan", { vm.loadDeviceSongs() }, icon = AppIcons.Refresh) }) }
+                    itemsIndexed(device, key = { _, t -> "d-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(device, i) }) }
+                }
             }
 
             "history" -> {

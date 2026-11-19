@@ -15,8 +15,8 @@ android {
         applicationId = "dev.foulfoxhacks.betteryts.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
         // Built by ../scripts/build-core.ps1 into src/main/jniLibs.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
@@ -75,5 +75,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Document-start scripts in the player's YouTube frame (background play).
     implementation("androidx.webkit:webkit:1.14.0")
+    // Device files: offline playback of music stored on the phone.
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

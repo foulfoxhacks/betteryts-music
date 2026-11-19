@@ -159,7 +159,7 @@ class PlaybackService : Service() {
         art = null
         val url = now.art ?: return
         io.execute {
-            val bmp = runCatching {
+            val bmp = if (url.startsWith("content://")) dev.foulfoxhacks.betteryts.music.device.DeviceMusic.art(this, url) else runCatching {
                 val c = (URL(url).openConnection() as HttpURLConnection).apply { connectTimeout = 8000; readTimeout = 8000 }
                 try {
                     c.inputStream.use { BitmapFactory.decodeStream(it) }
