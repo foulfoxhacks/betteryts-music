@@ -239,6 +239,10 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				Ok(s.settings.settings.view())
 			})
 		}
+		"rooms.new" => {
+			let v = api().get_json("/api/rooms/new", &[])?;
+			Ok(json!({ "code": v.get("code"), "hostKey": v.get("hostKey") }))
+		}
 		"plugin.segments" => to_value(plugins::segments(&api(), &arg::<String>(a, "id")?)?),
 		"plugin.dislikes" => plugins::dislikes(&api(), &arg::<String>(a, "id")?),
 		"plugin.lyrics" => to_value(plugins::lyrics(&arg::<Track>(a, "track")?)?),

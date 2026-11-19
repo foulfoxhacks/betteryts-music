@@ -35,6 +35,13 @@ pub const CATALOG: &[PluginInfo] = &[
 		default_enabled: true,
 	},
 	PluginInfo {
+		id: "background",
+		name: "Background play",
+		description: "Keep the music going with the screen off or in other apps, with lock-screen, notification, headset and car controls. Goes beyond YouTube's embedded-player terms, so it's for sideloaded builds.",
+		category: "Playback",
+		default_enabled: true,
+	},
+	PluginInfo {
 		id: "lyrics",
 		name: "Synced lyrics",
 		description: "Time-synced lyrics from LRCLIB in the player's Lyrics tab. Tap a line to jump to it.",
@@ -53,6 +60,13 @@ pub const CATALOG: &[PluginInfo] = &[
 		name: "Sleep timer",
 		description: "Stops the music after 15 minutes to 2 hours, or at the end of the current song.",
 		category: "Playback",
+		default_enabled: true,
+	},
+	PluginInfo {
+		id: "together",
+		name: "Listen Together",
+		description: "BetterYTS watch-party rooms: listen in sync with friends in the app, on the website, or in VRChat.",
+		category: "BetterYTS",
 		default_enabled: true,
 	},
 	PluginInfo {

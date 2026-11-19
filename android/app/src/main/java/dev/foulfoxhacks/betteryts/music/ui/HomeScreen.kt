@@ -156,7 +156,7 @@ fun HomeScreen(vm: AppViewModel, pad: PaddingValues) {
             item {
                 when (val s = shelf.tracks) {
                     Load.Loading -> Loading()
-                    is Load.Failed -> ErrorBox(s.message)
+                    is Load.Failed -> ErrorBox(s.message) { vm.retryShelves() }
                     is Load.Ready -> TrackCarousel(s.value) { i -> vm.playTracks(s.value, i) }
                 }
             }

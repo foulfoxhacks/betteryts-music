@@ -256,6 +256,32 @@ fun AddToPlaylistDialog(vm: AppViewModel, track: Track) {
 }
 
 @Composable
+fun JoinRoomDialog(onDismiss: () -> Unit, onJoin: (String) -> Unit) {
+    var code by remember { mutableStateOf("") }
+    val valid = Regex("^[A-HJ-NP-Z2-9]{6}$").matches(code)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Brand.Surface,
+        title = { Text("JOIN A ROOM", style = LabelStyle, color = Brand.Tan) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Enter the 6-character code from a BetterYTS watch party (web, app or VRChat).", color = Brand.Muted, fontSize = 13.sp)
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { v -> code = v.uppercase().filter { it.isLetterOrDigit() }.take(6) },
+                    singleLine = true,
+                    placeholder = { Text("ABC234", color = Brand.Muted) },
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp, color = Brand.Paper),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Line, cursorColor = Brand.Gold),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onJoin(code) }, enabled = valid) { Text("JOIN", style = LabelStyle, color = if (valid) Brand.Gold else Brand.Muted) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", style = LabelStyle, color = Brand.Muted) } },
+    )
+}
+
+@Composable
 fun NamePlaylistDialog(title: String, initial: String, confirm: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var name by remember { mutableStateOf(initial) }
     AlertDialog(

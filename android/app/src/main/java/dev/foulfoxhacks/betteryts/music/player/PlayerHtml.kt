@@ -18,7 +18,7 @@ object PlayerHtml {
 <body>
 <div id="p"></div>
 <script>
-  var player = null, ready = false, pending = null;
+  var player = null, ready = false, pending = null, rate = 1;
 
   function load(id, start, autoplay) {
     if (!ready) { pending = [id, start, autoplay]; return; }
@@ -28,6 +28,7 @@ object PlayerHtml {
   function play() { if (ready) player.playVideo(); }
   function pause() { if (ready) player.pauseVideo(); }
   function seek(t) { if (ready) player.seekTo(t, true); }
+  function speed(r) { rate = r; if (ready) { player.setPlaybackRate(r); console.log('speed ' + r + ' -> ' + player.getPlaybackRate()); } }
 
   window.onYouTubeIframeAPIReady = function () {
     player = new YT.Player('p', {
@@ -40,7 +41,11 @@ object PlayerHtml {
           Bridge.onReady();
           if (pending) { load(pending[0], pending[1], pending[2]); pending = null; }
         },
-        onStateChange: function (e) { Bridge.onState(e.data); },
+        onStateChange: function (e) {
+          // Each new video starts at 1x; put the chosen speed back.
+          if (e.data == 1) player.setPlaybackRate(rate);
+          Bridge.onState(e.data);
+        },
         onError: function (e) { Bridge.onError(e.data); }
       }
     });

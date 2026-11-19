@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -75,6 +76,10 @@ private fun compact(n: Long): String = when {
     else -> n.toString()
 }
 
+/** 0.75×, 1× — a compact label for the speed button and its menu. */
+private fun formatSpeed(rate: Float): String =
+    if (rate % 1f == 0f) "${rate.toInt()}×" else "${rate}×"
+
 fun copyText(context: Context, label: String, text: String) {
     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, text))
 }
@@ -116,8 +121,8 @@ fun MiniPlayer(vm: AppViewModel, player: PlayerController, track: Track, height:
             IconButton(onClick = vm::togglePlay) {
                 Icon(if (player.playing) AppIcons.Pause else AppIcons.Play, if (player.playing) "Pause" else "Play", tint = Brand.Paper)
             }
-            IconButton(onClick = { vm.next() }, enabled = vm.queue.hasNext) {
-                Icon(AppIcons.Next, "Next", tint = if (vm.queue.hasNext) Brand.Paper else Brand.Muted.copy(alpha = 0.4f))
+            IconButton(onClick = { vm.next() }, enabled = vm.canSkip) {
+                Icon(AppIcons.Next, "Next", tint = if (vm.canSkip) Brand.Paper else Brand.Muted.copy(alpha = 0.4f))
             }
         }
     }
@@ -130,7 +135,7 @@ private enum class PlayerTab(val label: String) { UpNext("Up next"), Lyrics("Lyr
 @Composable
 fun NowPlaying(vm: AppViewModel, player: PlayerController, top: Dp, bottom: Dp, videoHeight: Dp) {
     val q = vm.queue
-    val track = q.current ?: return
+    val track = vm.nowPlaying ?: return
     var tab by rememberSaveable { mutableStateOf(PlayerTab.UpNext) }
     val tabs = PlayerTab.entries.filter { it != PlayerTab.Lyrics || vm.pluginOn("lyrics") }
     if (tab !in tabs) tab = PlayerTab.UpNext
@@ -146,6 +151,7 @@ fun NowPlaying(vm: AppViewModel, player: PlayerController, top: Dp, bottom: Dp, 
             PlayerTopBar(vm, track)
             Spacer(Modifier.height(videoHeight))
 
+            if (tab == PlayerTab.Lyrics) LyricsAutoScroll(vm, player, track, list)
             LazyColumn(state = list, modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = bottom + 16.dp)) {
                 item { TitleRow(vm, track) }
                 item { SeekBar(vm, player, track) }
@@ -156,13 +162,14 @@ fun NowPlaying(vm: AppViewModel, player: PlayerController, top: Dp, bottom: Dp, 
                     }
                 }
                 when (tab) {
-                    PlayerTab.UpNext -> upNext(vm, q)
-                    PlayerTab.Lyrics -> item { LyricsPanel(vm, player, track) }
+                    PlayerTab.UpNext -> if (vm.room != null) roomPanel(vm) else upNext(vm, q)
+                    PlayerTab.Lyrics -> lyricsItems(vm, player, track)
                     PlayerTab.Related -> related(vm, track)
                 }
                 item {
                     Text(
-                        "Plays through YouTube's official player, so music pauses when you leave the app.",
+                        if (vm.pluginOn("background")) "Background play is on: the music keeps going when you leave the app or turn off the screen."
+                        else "Plays through YouTube's official player. Press Home while a song plays and it keeps going in a floating player.",
                         Modifier.fillMaxWidth().padding(16.dp),
                         color = Brand.Muted.copy(alpha = 0.7f),
                         fontSize = 11.sp,
@@ -179,6 +186,7 @@ private fun PlayerTopBar(vm: AppViewModel, track: Track) {
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     var sleepMenu by remember { mutableStateOf(false) }
+    var speedMenu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { vm.playerExpanded = false }) { Icon(AppIcons.Collapse, "Close player", tint = Brand.Paper) }
         Column(Modifier.weight(1f)) {
@@ -187,6 +195,7 @@ private fun PlayerTopBar(vm: AppViewModel, track: Track) {
             val note = when {
                 vm.sleepAtEndOfSong -> "Sleep timer: after this song"
                 sleep != null -> "Sleep timer: ${((sleep - System.currentTimeMillis()) / 60_000).coerceAtLeast(0) + 1} min"
+                vm.room != null -> "Listening together · ${vm.room?.code}"
                 else -> "${vm.queue.position + 1} of ${vm.queue.tracks.size}"
             }
             Text(note, color = Brand.Muted, fontSize = 11.sp)
@@ -208,9 +217,31 @@ private fun PlayerTopBar(vm: AppViewModel, track: Track) {
             }
         }
         Box {
+            IconButton(onClick = { speedMenu = true }) {
+                Text(
+                    formatSpeed(vm.speed),
+                    color = if (vm.speed != 1f) Brand.Gold else Brand.Paper,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 13.sp,
+                )
+            }
+            DropdownMenu(speedMenu, onDismissRequest = { speedMenu = false }, containerColor = Brand.Raised) {
+                listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { r ->
+                    DropdownMenuItem(
+                        text = { Text(if (r == 1f) "1× · Normal" else formatSpeed(r), color = if (vm.speed == r) Brand.Gold else Brand.Paper) },
+                        onClick = { speedMenu = false; vm.chooseSpeed(r) },
+                    )
+                }
+            }
+        }
+        Box {
             IconButton(onClick = { menu = true }) { Icon(AppIcons.More, "More", tint = Brand.Paper) }
             DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = Brand.Raised) {
                 DropdownMenuItem(text = { Text("Add to playlist…", color = Brand.Paper) }, onClick = { menu = false; vm.playlistPickerFor = track })
+                if (vm.pluginOn("together") && vm.room == null) {
+                    DropdownMenuItem(text = { Text("Start listening together", color = Brand.Paper) }, onClick = { menu = false; vm.startTogether() })
+                    DropdownMenuItem(text = { Text("Join a room…", color = Brand.Paper) }, onClick = { menu = false; vm.joinRoomDialog = true })
+                }
                 if (track.artistId != null) DropdownMenuItem(text = { Text("Go to artist", color = Brand.Paper) }, onClick = { menu = false; vm.openArtist(track.artistId, track.artist) })
                 if (vm.pluginOn("vrchat")) {
                     DropdownMenuItem(
@@ -307,49 +338,102 @@ private fun LazyListScope.related(vm: AppViewModel, track: Track) {
     }
 }
 
-/** Synced lyrics: the current line is highlighted and centred; tap a line to jump there. */
-@Composable
-private fun LyricsPanel(vm: AppViewModel, player: PlayerController, track: Track) {
-    LaunchedEffect(track.id) { vm.loadLyrics(track) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        when (val state = vm.lyrics[track.id]) {
-            is Load.Ready -> {
-                val l = state.value
-                when {
-                    l == null -> EmptyNote("No lyrics found", "LRCLIB doesn't have this song yet.")
-                    l.instrumental -> EmptyNote("Instrumental", "No lyrics: enjoy the music.")
-                    l.synced.isNotEmpty() -> SyncedLyrics(l.synced, player)
-                    l.plain != null -> Text(l.plain, color = Brand.Paper, fontSize = 18.sp, lineHeight = 28.sp)
-                    else -> EmptyNote("No lyrics found", "LRCLIB doesn't have this song yet.")
+/** Rows above the first lyric line in the player's list: title, seek bar, controls, tabs, header. */
+private const val LYRICS_FIRST_ROW = 5
+
+/** Synced lyrics, one row per line: the current line is highlighted; tap a line to jump there. */
+private fun LazyListScope.lyricsItems(vm: AppViewModel, player: PlayerController, track: Track) {
+    item(key = "lyrics-head") {
+        LaunchedEffect(track.id) { vm.loadLyrics(track) }
+        Text("LYRICS FROM LRCLIB", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = LabelStyle, fontSize = 10.sp, color = Brand.Muted)
+    }
+    when (val state = vm.lyrics[track.id]) {
+        is Load.Ready -> {
+            val l = state.value
+            when {
+                l == null -> item { EmptyNote("No lyrics found", "LRCLIB doesn't have this song yet.") }
+                l.instrumental -> item { EmptyNote("Instrumental", "No lyrics: enjoy the music.") }
+                l.synced.isNotEmpty() -> itemsIndexed(l.synced, key = { i, _ -> "lyric-$i" }) { i, line ->
+                    val current = l.synced.indexOfLast { it.time <= player.position + 0.3f }
+                    val active = i == current
+                    Text(
+                        line.text.ifBlank { "♪" },
+                        Modifier.fillMaxWidth().clickable { vm.seek(line.time) }.padding(horizontal = 16.dp, vertical = 5.dp),
+                        color = when {
+                            active -> Brand.Gold
+                            i < current -> Brand.Muted.copy(alpha = 0.6f)
+                            else -> Brand.Paper.copy(alpha = 0.85f)
+                        },
+                        fontSize = if (active) 22.sp else 19.sp,
+                        fontWeight = if (active) FontWeight.Black else FontWeight.Bold,
+                        lineHeight = 28.sp,
+                    )
                 }
-                Text("Lyrics from LRCLIB", Modifier.padding(top = 12.dp), style = LabelStyle, fontSize = 10.sp, color = Brand.Muted)
+                l.plain != null -> item { Text(l.plain, Modifier.padding(horizontal = 16.dp), color = Brand.Paper, fontSize = 18.sp, lineHeight = 28.sp) }
+                else -> item { EmptyNote("No lyrics found", "LRCLIB doesn't have this song yet.") }
             }
-            is Load.Failed -> ErrorBox(state.message)
-            else -> Loading()
         }
+        is Load.Failed -> item { ErrorBox(state.message) }
+        else -> item { Loading() }
     }
 }
 
+/** Keeps the current lyric line in view, unless the user is scrolling the list themself. */
 @Composable
-private fun SyncedLyrics(lines: List<Core.LyricLine>, player: PlayerController) {
-    val now = player.position
-    val current = lines.indexOfLast { it.time <= now + 0.3f }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        lines.forEachIndexed { i, line ->
-            val active = i == current
-            Text(
-                line.text.ifBlank { "♪" },
-                Modifier.fillMaxWidth().clickable { player.seek(line.time) },
-                color = when {
-                    active -> Brand.Gold
-                    i < current -> Brand.Muted.copy(alpha = 0.6f)
-                    else -> Brand.Paper.copy(alpha = 0.85f)
-                },
-                fontSize = if (active) 22.sp else 19.sp,
-                fontWeight = if (active) FontWeight.Black else FontWeight.Bold,
-                lineHeight = 28.sp,
-            )
+private fun LyricsAutoScroll(vm: AppViewModel, player: PlayerController, track: Track, list: androidx.compose.foundation.lazy.LazyListState) {
+    val lines = (vm.lyrics[track.id] as? Load.Ready)?.value?.synced.orEmpty()
+    if (lines.isEmpty()) return
+    val current = lines.indexOfLast { it.time <= player.position + 0.3f }
+    LaunchedEffect(current) {
+        if (current >= 0 && !list.isScrollInProgress) list.animateScrollToItem((LYRICS_FIRST_ROW + current - 3).coerceAtLeast(0))
+    }
+}
+
+/** Listen Together: room card + the room's shared queue. */
+private fun LazyListScope.roomPanel(vm: AppViewModel) {
+    val r = vm.room ?: return
+    item(key = "room-card") {
+        val context = LocalContext.current
+        val s = vm.roomState
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).background(Brand.CardGradient).border(1.dp, Brand.LineGold).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Eyebrow("Listen Together")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.background(Brand.Gold).padding(horizontal = 10.dp, vertical = 4.dp)) {
+                    Text(r.code, color = Brand.GoldInk, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 3.sp)
+                }
+                Text(
+                    listOf(vm.roomMembers, if (vm.roomIsHost) "you're the host" else null, vm.roomStatus.ifBlank { null }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · "),
+                    Modifier.padding(start = 10.dp),
+                    color = Brand.Muted,
+                    fontSize = 12.sp,
+                )
+            }
+            if (s?.locked == true) Text(if (vm.roomIsHost) "Host-only: guests can't change playback." else "The host controls playback.", color = Brand.Tan, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrandButton("Invite", {
+                    copyText(context, "Room invite", vm.roomInviteLink(r.code))
+                    vm.message = "Invite link copied: it opens on the web or in the app"
+                })
+                if (vm.pluginOn("vrchat")) BrandButton("VRChat", {
+                    copyText(context, "VRChat room link", vm.roomVrchatLink(r.code))
+                    vm.message = "Copied. Paste into a VRChat video player to follow the room."
+                })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (vm.roomIsHost) BrandButton(if (s?.locked == true) "Unlock" else "Host only", { vm.toggleRoomLock() })
+                BrandButton("Leave", { vm.leaveRoom() })
+            }
         }
+    }
+    val queue = vm.roomQueue
+    if (queue.isEmpty()) {
+        item(key = "room-empty") { EmptyNote("Room queue is empty", "Use ⋮ → Add to queue on any song. Everyone in the room hears it next.") }
+    }
+    itemsIndexed(queue, key = { i, t -> "rq-$i-" + t.id }) { i, t ->
+        TrackRow(vm, t, onClick = { vm.jumpTo(i) }, leading = "${i + 1}", extraActions = listOf("Remove from the room's queue" to { vm.removeFromQueue(i) }))
     }
 }
 
@@ -399,8 +483,8 @@ private fun Controls(vm: AppViewModel, player: PlayerController) {
         ) {
             Icon(if (player.playing) AppIcons.Pause else AppIcons.Play, if (player.playing) "Pause" else "Play", Modifier.size(40.dp), tint = Brand.GoldInk)
         }
-        IconButton(onClick = { vm.next() }, enabled = q.hasNext) {
-            Icon(AppIcons.Next, "Next", Modifier.size(32.dp), tint = if (q.hasNext) Brand.Paper else Brand.Muted.copy(alpha = 0.4f))
+        IconButton(onClick = { vm.next() }, enabled = vm.canSkip) {
+            Icon(AppIcons.Next, "Next", Modifier.size(32.dp), tint = if (vm.canSkip) Brand.Paper else Brand.Muted.copy(alpha = 0.4f))
         }
         IconButton(onClick = { vm.cycleRepeat() }) {
             val (icon, label) = when (q.repeat) {

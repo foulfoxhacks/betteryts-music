@@ -66,6 +66,16 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
                 }
             }
 
+            item { SectionHeader("Playback") }
+            item {
+                ToggleRow(
+                    icon = AppIcons.Resume,
+                    title = "Resume where you left off",
+                    description = "Long mixes and songs pick up from where you paused, even after a restart.",
+                    checked = vm.resumeEnabled,
+                ) { vm.setResume(it) }
+            }
+
             item {
                 SectionHeader("Plugins")
                 Text(
@@ -87,7 +97,7 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             item { SectionHeader("About") }
             item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("BetterYTS Music by FoulFoxHacks · 0.1.0", color = Brand.Paper, fontWeight = FontWeight.Bold)
+                    Text("BetterYTS Music by FoulFoxHacks · 0.3.0", color = Brand.Paper, fontWeight = FontWeight.Bold)
                     Text("Search and pages come from the BetterYTS API (yts.foulfoxhacks.dev). Songs play through YouTube's official player.", color = Brand.Muted, fontSize = 13.sp)
                     Text("Skip data: SponsorBlock (CC BY-NC-SA 4.0). Dislike counts: Return YouTube Dislike. Lyrics: LRCLIB.", color = Brand.Muted, fontSize = 13.sp)
                 }
@@ -119,8 +129,29 @@ private fun ThemeCard(p: Palette, name: String, selected: Boolean, modifier: Mod
 }
 
 @Composable
-private fun PluginRow(p: Core.PluginInfo, onToggle: (Boolean) -> Unit) {
+private fun ToggleRow(icon: ImageVector, title: String, description: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
     Row(
+        Modifier.fillMaxWidth().clickable { onToggle(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(40.dp).border(1.dp, Brand.LineGold), contentAlignment = Alignment.Center) {
+            Icon(icon, null, Modifier.size(20.dp), tint = if (checked) Brand.Gold else Brand.Muted)
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(title, color = Brand.Paper, fontWeight = FontWeight.Bold)
+            Text(description, color = Brand.Muted, fontSize = 12.sp)
+        }
+        Spacer(Modifier.width(4.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onToggle,
+            colors = SwitchDefaults.colors(checkedThumbColor = Brand.GoldInk, checkedTrackColor = Brand.Gold, uncheckedTrackColor = Brand.Raised, uncheckedThumbColor = Brand.Muted, uncheckedBorderColor = Brand.Line),
+        )
+    }
+}
+
+@Composable
+private fun PluginRow(p: Core.PluginInfo, onToggle: (Boolean) -> Unit) {    Row(
         Modifier.fillMaxWidth().clickable { onToggle(!p.enabled) }.padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

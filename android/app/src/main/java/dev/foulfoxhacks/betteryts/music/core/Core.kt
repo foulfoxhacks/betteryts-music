@@ -131,6 +131,12 @@ object Core {
         )
     }
 
+    /** A new watch-party room: (code, hostKey). */
+    suspend fun roomsNew(): Pair<String?, String?> {
+        val o = obj("rooms.new")
+        return o.str("code") to o.str("hostKey")
+    }
+
     suspend fun protvPlaylist(name: String, tracks: List<Track>): String =
         request("plugin.protv", args("name" to name, "tracks" to Track.array(tracks))) as? String ?: ""
 

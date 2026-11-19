@@ -16,3 +16,7 @@ android/app/src/main/jniLibs/
 # Signing
 *.jks
 *.keystore
+android/keystore.properties
+
+# Built APK/AAB copies
+dist/

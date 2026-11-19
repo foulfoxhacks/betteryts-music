@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import dev.foulfoxhacks.betteryts.music.account.GoogleAccount
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -23,6 +24,8 @@ import dev.foulfoxhacks.betteryts.music.core.Link
 import dev.foulfoxhacks.betteryts.music.core.QueueState
 import dev.foulfoxhacks.betteryts.music.core.Track
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
+import dev.foulfoxhacks.betteryts.music.together.RoomClient
+import dev.foulfoxhacks.betteryts.music.together.RoomState
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
 import dev.foulfoxhacks.betteryts.music.ui.theme.Palettes
 import kotlinx.coroutines.Job
@@ -56,6 +59,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     val stack = mutableStateListOf<Route>()
     var playerExpanded by mutableStateOf(false)
 
+    /** True while the activity is in picture-in-picture: the app draws only the video then. */
+    var inPip by mutableStateOf(false)
+
     // ---- data ----
     var library by mutableStateOf(Library())
         private set
@@ -88,6 +94,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private var player: PlayerController? = null
     private var suggestJob: Job? = null
     private var searchJob: Job? = null
+
+    /** Playback preferences that don't belong in the Rust core: speed and resume. */
+    private val playPrefs = app.getSharedPreferences("playback", android.content.Context.MODE_PRIVATE)
+
+    /** Speed for every song (0.5x–2x). YouTube starts each new video at 1x, so the player re-applies it. */
+    var speed by mutableFloatStateOf(1f)
+        private set
+    var resumeEnabled by mutableStateOf(playPrefs.getBoolean("resume", true))
+        private set
+
+    /** Resume positions are saved twice a second by the player; only write every few seconds. */
+    private var lastProgressAt = 0L
+    private var endedId: String? = null
 
     var settings by mutableStateOf(Core.Settings())
         private set
@@ -327,22 +346,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     fun attach(p: PlayerController) {
         player = p
         p.listener = this
+        speed = playPrefs.getFloat("speed", 1f).takeIf { it in 0.5f..2f } ?: 1f
+        p.applySpeed(speed)
         // The activity was recreated with something in the queue: cue it, don't blast it.
-        queue.current?.let { p.load(it.id, autoplay = false) }
+        queue.current?.let { p.load(it.id, resumePosition(it), autoplay = false) }
     }
 
     fun detach(p: PlayerController) {
         if (player === p) player = null
     }
 
+    /** Where a song should start: the saved position for long listens, otherwise the beginning. */
+    private fun resumePosition(t: Track): Float {
+        if (!resumeEnabled || room != null || t.live) return 0f
+        val saved = playPrefs.getFloat("pos:" + t.id, 0f)
+        if (saved < 15f) return 0f
+        val total = t.durationSeconds?.toFloat() ?: 0f
+        // Almost at the end: the user finished it, so play it from the top next time.
+        return if (total > 0f && saved >= total - 20f) 0f else saved
+    }
+
+    /** Saved speed applies to every song, now and after a restart. */
+    fun chooseSpeed(rate: Float) {
+        val v = rate.coerceIn(0.5f, 2f)
+        speed = v
+        player?.applySpeed(v)
+        playPrefs.edit().putFloat("speed", v).apply()
+    }
+
+    fun setResume(on: Boolean) {
+        resumeEnabled = on
+        playPrefs.edit().putBoolean("resume", on).apply()
+        message = if (on) "Songs will resume where you left off" else "Songs always start from the beginning"
+    }
+
     private fun playCurrent() {
         val t = queue.current ?: return
-        player?.load(t.id)
+        endedId = null
+        player?.load(t.id, resumePosition(t))
         onTrackChanged(t)
     }
 
     fun playTracks(tracks: List<Track>, start: Int, shuffle: Boolean = false) {
         if (tracks.isEmpty()) return
+        if (room != null) {
+            val t = tracks[start.coerceIn(0, tracks.lastIndex)]
+            if (roomSend("load", "video" to room!!.video(t.id, t.title))) message = "Playing for everyone: ${t.title}"
+            return
+        }
         io {
             queue = Core.queueSet(tracks, start, shuffle)
             playCurrent()
@@ -362,10 +413,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun togglePlay() {
         val p = player ?: return
+        if (room != null) {
+            roomSend(if (roomState?.playing == true) "pause" else "play", "position" to p.position)
+            return
+        }
         if (p.currentId == null) playCurrent() else p.toggle()
     }
 
-    fun next() = io {
+    fun next() {
+        if (room != null) {
+            roomSend("next")
+            return
+        }
+        nextLocal()
+    }
+
+    private fun nextLocal() = io {
         val q = Core.queueNext(user = true)
         queue = q
         if (!q.ended) playCurrent()
@@ -373,6 +436,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun previous() {
         val p = player
+        if (room != null) {
+            roomSend("seek", "position" to 0)
+            return
+        }
         if (p != null && p.position > 4f) {
             p.seek(0f)
             return
@@ -383,30 +450,69 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
     }
 
-    fun jumpTo(position: Int) = io {
+    fun jumpTo(position: Int) {
+        if (room != null) {
+            val t = roomQueue.getOrNull(position) ?: return
+            if (roomSend("load", "video" to room!!.video(t.id, t.title))) roomSend("queue_remove", "index" to position)
+            return
+        }
+        jumpLocal(position)
+    }
+
+    private fun jumpLocal(position: Int) = io {
         queue = Core.queueJump(position)
         playCurrent()
     }
 
-    fun playNext(track: Track) = io {
+    fun playNext(track: Track) {
+        if (room != null) return addToQueue(track)
+        playNextLocal(track)
+    }
+
+    private fun playNextLocal(track: Track) = io {
         val wasEmpty = queue.current == null
         queue = Core.queuePlayNext(track)
         if (wasEmpty) playCurrent() else message = "Playing next: ${track.title}"
     }
 
-    fun addToQueue(track: Track) = io {
+    fun addToQueue(track: Track) {
+        if (room != null) {
+            if (roomSend("queue_add", "video" to room!!.video(track.id, track.title))) message = "Added to the room's queue"
+            return
+        }
+        addLocal(track)
+    }
+
+    private fun addLocal(track: Track) = io {
         val wasEmpty = queue.current == null
         queue = Core.queueAdd(track)
         if (wasEmpty) playCurrent() else message = "Added to queue"
     }
 
-    fun addAllToQueue(tracks: List<Track>) = io {
+    fun addAllToQueue(tracks: List<Track>) {
+        if (room != null) {
+            if (canControlRoom()) tracks.take(50).forEach { t -> room!!.send("queue_add", "video" to room!!.video(t.id, t.title)) }
+            message = "Added ${minOf(tracks.size, 50)} songs to the room's queue"
+            return
+        }
+        addAllLocal(tracks)
+    }
+
+    private fun addAllLocal(tracks: List<Track>) = io {
         val wasEmpty = queue.current == null
         queue = Core.queueAddAll(tracks)
         if (wasEmpty) playCurrent() else message = "Added ${tracks.size} songs to the queue"
     }
 
-    fun removeFromQueue(position: Int) = io {
+    fun removeFromQueue(position: Int) {
+        if (room != null) {
+            roomSend("queue_remove", "index" to position)
+            return
+        }
+        removeLocal(position)
+    }
+
+    private fun removeLocal(position: Int) = io {
         val before = queue.current?.id
         queue = Core.queueRemove(position)
         if (queue.current?.id != before) {
@@ -414,11 +520,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
     }
 
-    fun moveInQueue(from: Int, to: Int) = io { queue = Core.queueMove(from, to) }
-    fun toggleShuffle() = io { queue = Core.queueShuffle() }
-    fun cycleRepeat() = io { queue = Core.queueRepeat() }
+    private fun notInRoom(what: String): Boolean {
+        if (room != null) message = "$what isn't available while listening together"
+        return room == null
+    }
 
-    fun seek(seconds: Float) = player?.seek(seconds)
+    fun moveInQueue(from: Int, to: Int) {
+        if (notInRoom("Reordering")) io { queue = Core.queueMove(from, to) }
+    }
+
+    fun toggleShuffle() {
+        if (notInRoom("Shuffle")) io { queue = Core.queueShuffle() }
+    }
+
+    fun cycleRepeat() {
+        if (notInRoom("Repeat")) io { queue = Core.queueRepeat() }
+    }
+
+    fun seek(seconds: Float) {
+        if (room != null) {
+            roomSend("seek", "position" to seconds)
+        } else {
+            if (seconds < 1f) queue.current?.let { playPrefs.edit().remove("pos:" + it.id).apply() }
+            player?.seek(seconds)
+        }
+    }
 
     override fun onStartedPlaying(id: String) {
         val t = queue.current?.takeIf { it.id == id } ?: return
@@ -426,6 +552,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     override fun onEnded(id: String) {
+        if (room != null) {
+            // Every member reports the end; the server only advances once.
+            room?.send("ended", "id" to id)
+            return
+        }
+        endedId = id
+        playPrefs.edit().remove("pos:" + id).apply()
         if (queue.current?.id != id) return
         if (sleepAtEndOfSong) {
             cancelSleep()
@@ -441,6 +574,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     override fun onError(id: String?, code: Int) {
         message = PlayerController.describe(code)
+        // In a room, one member's player failing mustn't skip the song for everyone.
+        if (room != null) {
+            message = "This video can't play here (error $code). The room keeps going."
+            return
+        }
         if (id == null || queue.current?.id != id) return
         viewModelScope.launch {
             delay(1500)
@@ -542,7 +680,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     /** SponsorBlock for music: jump over non-music parts; a trailing outro ends the song. */
     override fun onProgress(id: String, seconds: Float, duration: Float) {
-        if (!pluginOn("sponsorblock") || queue.current?.id != id) return
+        // Remember where playback stopped. Skip finished songs and the first moments of a cue,
+        // which report 0 before YouTube knows the real position.
+        if (room == null && id == endedId && seconds < 3f) endedId = null
+        if (room == null && resumeEnabled && id != endedId && seconds >= 0.5f && duration > 5f && seconds < duration - 3f) {
+            val now = System.currentTimeMillis()
+            if (now - lastProgressAt > 5_000) {
+                lastProgressAt = now
+                playPrefs.edit().putFloat("pos:" + id, seconds).apply()
+            }
+        }
+        // In a room the room decides where playback is, so local skipping is off.
+        if (room != null || !pluginOn("sponsorblock") || queue.current?.id != id) return
         val seg = segmentsFor[id]?.firstOrNull { seconds >= it.start && seconds < it.end - 0.5f && it.end > skippedUntil } ?: return
         skippedUntil = seg.end
         if (duration > 0 && seg.end >= duration - 1f) {
@@ -610,6 +759,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     // ---- "Mixed for you" shelves (fetched once per session) ----
     var shelves by mutableStateOf<List<Shelf>>(emptyList())
         private set
+
+    fun retryShelves() = loadShelves()
 
     private fun loadShelves() {
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
@@ -693,6 +844,138 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             googleChannel = null
             googleBusy = null
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Listen Together: BetterYTS watch-party rooms (same protocol as the website and VRChat)
+    // ---------------------------------------------------------------------------------------
+
+    var room by mutableStateOf<RoomClient?>(null)
+        private set
+    var roomState by mutableStateOf<RoomState?>(null)
+        private set
+    var roomIsHost by mutableStateOf(false)
+        private set
+    var roomMembers by mutableStateOf("")
+        private set
+    var roomStatus by mutableStateOf("")
+        private set
+    var joinRoomDialog by mutableStateOf(false)
+
+    private val roomKeys = app.getSharedPreferences("rooms", android.content.Context.MODE_PRIVATE)
+
+    /** What's playing: the room's video while in a room, otherwise the local queue's. */
+    val nowPlaying: Track?
+        get() = if (room != null) roomState?.video?.let { Track(it.id, it.title, "Listening together") } else queue.current
+
+    val canSkip: Boolean get() = if (room != null) roomState?.queue?.isNotEmpty() == true else queue.hasNext
+
+    /** The room's queue shown as tracks (rooms only carry IDs and titles). */
+    val roomQueue: List<Track> get() = roomState?.queue.orEmpty().map { Track(it.id, it.title, "Up next in the room") }
+
+    private fun canControlRoom(): Boolean {
+        val s = roomState
+        if (s?.locked == true && !roomIsHost) {
+            message = "The host controls playback in this room"
+            return false
+        }
+        return true
+    }
+
+    /** Sends a playback/queue change to the room (returns false when the room is host-only). */
+    private fun roomSend(type: String, vararg pairs: Pair<String, Any?>): Boolean {
+        val r = room ?: return false
+        if (!canControlRoom()) return false
+        r.send(type, *pairs)
+        return true
+    }
+
+    fun startTogether() = io {
+        val o = Core.roomsNew()
+        val code = o.first ?: throw CoreException("Couldn't create a room")
+        o.second?.let { roomKeys.edit().putString(code, it).apply() }
+        // Bring what's playing (and what's next) into the new room.
+        val seed = listOfNotNull(queue.current) + queue.tracks.drop(queue.position + 1).take(30)
+        val start = player?.position ?: 0f
+        joinRoom(code)
+        val r = room ?: return@io
+        seed.forEachIndexed { i, t -> r.send(if (i == 0) "load" else "queue_add", "video" to r.video(t.id, t.title)) }
+        if (start > 3f && seed.isNotEmpty()) r.send("seek", "position" to start)
+        message = "Room $code is open. Share the invite link!"
+    }
+
+    fun joinRoom(rawCode: String) {
+        val code = rawCode.trim().uppercase()
+        if (!RoomClient.CODE.matches(code)) {
+            message = "Room codes are 6 letters and numbers"
+            return
+        }
+        room?.close()
+        roomState = null
+        roomIsHost = false
+        roomMembers = ""
+        val client = RoomClient(code, roomKeys.getString(code, null), "Guest", object : RoomClient.Events {
+            override fun onState(state: RoomState) {
+                roomState = state
+                applyRoomState(state)
+            }
+            override fun onMembers(count: Int, names: List<String>, hosts: List<String>) {
+                roomMembers = "$count listening" + if (hosts.isNotEmpty()) " · host: ${hosts.first()}" else ""
+            }
+            override fun onRole(host: Boolean) {
+                roomIsHost = host
+            }
+            override fun onDenied(reason: String) {
+                message = if (reason == "not_host") "Only the host can change that" else "The host controls playback in this room"
+            }
+            override fun onStatus(status: String) {
+                roomStatus = when (status) {
+                    "connected" -> ""
+                    "full" -> "Room is full"
+                    else -> "$status…"
+                }
+            }
+        })
+        room = client
+        client.connect()
+        playerExpanded = true
+    }
+
+    fun leaveRoom() {
+        room?.close()
+        room = null
+        roomState = null
+        roomIsHost = false
+        player?.pause()
+        message = "You left the room"
+    }
+
+    fun toggleRoomLock() {
+        val r = room ?: return
+        if (!roomIsHost) return
+        r.send("lock", "locked" to !(roomState?.locked ?: false))
+    }
+
+    fun roomInviteLink(code: String) = "${RoomClient.BASE}/?room=$code"
+    fun roomVrchatLink(code: String) = "${RoomClient.BASE}/room/$code"
+
+    /** Makes the local player match the room. */
+    private fun applyRoomState(s: RoomState) {
+        val p = player ?: return
+        val r = room ?: return
+        val v = s.video
+        if (v == null) {
+            p.pause()
+            return
+        }
+        val target = r.positionOf(s)
+        if (p.currentId != v.id) {
+            p.load(v.id, target, autoplay = s.playing)
+            onTrackChanged(Track(v.id, v.title, "Listening together"))
+            return
+        }
+        if (kotlin.math.abs(p.position - target) > 2f) p.seek(target)
+        if (s.playing && !p.playing) p.play() else if (!s.playing && p.playing) p.pause()
     }
 
     // Last, so every property above is initialised first (Kotlin runs initialisers in order).
