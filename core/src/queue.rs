@@ -262,7 +262,7 @@ mod tests {
 	use super::*;
 
 	fn t(id: &str) -> Track {
-		Track { id: id.into(), title: id.into(), artist: "A".into(), artist_id: None, thumbnail: None, duration: None, duration_seconds: None, live: false }
+		Track { id: id.into(), title: id.into(), artist: "A".into(), artist_id: None, thumbnail: None, duration: None, duration_seconds: None, live: false, plays: None }
 	}
 	fn ids(q: &Queue) -> Vec<String> {
 		q.view().tracks.into_iter().map(|t| t.id).collect()

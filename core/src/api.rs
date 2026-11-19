@@ -192,6 +192,7 @@ impl Api {
 			duration: secs.filter(|s| *s > 0).map(fmt_duration),
 			duration_seconds: secs.map(|s| s as u32).filter(|s| *s > 0),
 			live: v.get("isLive").and_then(Value::as_bool).unwrap_or(false),
+			plays: v.get("viewCount").and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok()))).map(model::plays_label),
 		})
 	}
 

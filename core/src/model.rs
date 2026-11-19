@@ -23,9 +23,24 @@ pub struct Track {
 	pub duration_seconds: Option<u32>,
 	#[serde(default)]
 	pub live: bool,
+	/// "8.8M plays" (from the video's view count), when known.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub plays: Option<String>,
 }
 
-/// A YouTube playlist or mix.
+/// 8_812_345 → "8.8M plays", the way music apps show it.
+pub fn plays_label(count: u64) -> String {
+	let (n, unit) = match count {
+		c if c >= 1_000_000_000 => (c as f64 / 1e9, "B"),
+		c if c >= 1_000_000 => (c as f64 / 1e6, "M"),
+		c if c >= 1_000 => (c as f64 / 1e3, "K"),
+		c => return format!("{c} play{}", if c == 1 { "" } else { "s" }),
+	};
+	let num = if n < 10.0 { format!("{:.1}", n).trim_end_matches(".0").to_string() } else { format!("{:.0}", n) };
+	format!("{num}{unit} plays")
+}
+
+/// A playlist or mix.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Collection {
@@ -109,7 +124,19 @@ pub fn track_from(v: &Value, fallback_artist: Option<(&str, &str)>) -> Option<Tr
 		duration: s(v, "duration"),
 		duration_seconds: v.get("durationSeconds").and_then(Value::as_u64).map(|x| x as u32),
 		live: v.get("live").and_then(Value::as_bool).unwrap_or(false),
+		plays: plays_from(v),
 	})
+}
+
+fn plays_from(v: &Value) -> Option<String> {
+	if v.get("live").and_then(Value::as_bool) == Some(true) {
+		return s(v, "views"); // "12,843 watching"
+	}
+	if let Some(n) = v.get("viewCount").and_then(Value::as_u64) {
+		return Some(plays_label(n));
+	}
+	// Channel pages only give "148K views".
+	s(v, "views").map(|t| t.replace(" views", " plays").replace(" view", " play"))
 }
 
 pub fn collection_from(v: &Value) -> Option<Collection> {
@@ -175,6 +202,19 @@ mod tests {
 		assert_eq!(t.artist, "Rick Astley");
 		assert_eq!(t.artist_id.as_deref(), Some("UCuAXFkgsw1L7xaCfnd5JJOw"));
 		assert_eq!(t.duration_seconds, Some(214));
+	}
+
+	#[test]
+	fn play_counts() {
+		assert_eq!(plays_label(8_812_345), "8.8M plays");
+		assert_eq!(plays_label(1_000_000), "1M plays");
+		assert_eq!(plays_label(48_200), "48K plays");
+		assert_eq!(plays_label(2_300_000_000), "2.3B plays");
+		assert_eq!(plays_label(1), "1 play");
+		let t = track_from(&json!({"type": "video", "id": "aaaaaaaaaaa", "title": "x", "viewCount": 625116123}), None).unwrap();
+		assert_eq!(t.plays.as_deref(), Some("625M plays"));
+		let c = track_from(&json!({"type": "video", "id": "aaaaaaaaaaa", "title": "x", "views": "148K views"}), Some(("A", "UC1"))).unwrap();
+		assert_eq!(c.plays.as_deref(), Some("148K plays"));
 	}
 
 	#[test]

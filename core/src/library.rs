@@ -252,7 +252,7 @@ mod tests {
 	use super::*;
 
 	fn t(id: &str) -> Track {
-		Track { id: id.into(), title: id.into(), artist: "A".into(), artist_id: None, thumbnail: None, duration: None, duration_seconds: None, live: false }
+		Track { id: id.into(), title: id.into(), artist: "A".into(), artist_id: None, thumbnail: None, duration: None, duration_seconds: None, live: false, plays: None }
 	}
 	fn artist(id: &str, handle: Option<&str>) -> Artist {
 		Artist { id: id.into(), name: id.into(), handle: handle.map(String::from), thumbnail: None, subtitle: None }

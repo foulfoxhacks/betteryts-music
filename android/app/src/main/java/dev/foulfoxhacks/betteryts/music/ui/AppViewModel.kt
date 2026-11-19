@@ -35,7 +35,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.util.Locale
 
-enum class Tab { Home, Search, Library }
+/** Bottom bar: Home, Explore, Library (YouTube Music's layout). Search opens from the top bar. */
+enum class Tab { Home, Explore, Search, Library }
 
 sealed interface Route {
     data class ArtistRoute(val id: String, val name: String?) : Route
@@ -824,19 +825,67 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             "Lo-fi beats" to "lofi hip hop",
             "Today's hits" to "top hits this week",
         )
-        shelves = picks.map { (title, q) -> Shelf(title, q, Load.Loading) }
+        fillShelves(picks, get = { shelves }, set = { shelves = it })
+    }
+
+    /** Shelves want songs, not hour-long "Top Hits 2026 ~ Mix" compilations or live streams. */
+    private val COMPILATION = Regex("""\b(mix|mixes|playlist|compilation|full album|nonstop|non-stop|top \d+|hits \d{4}|best songs|greatest hits|\d+ hours?)\b""", RegexOption.IGNORE_CASE)
+
+    private fun isSingleSong(t: Track) = !t.live && (t.durationSeconds ?: 0) in 1..600 && !COMPILATION.containsMatchIn(t.title)
+
+    /** Fills shelves from song searches, each one as soon as its search answers. */
+    private fun fillShelves(picks: List<Pair<String, String>>, get: () -> List<Shelf>, set: (List<Shelf>) -> Unit, size: Int = 12) {
+        set(picks.map { (title, q) -> Shelf(title, q, Load.Loading) })
         picks.forEachIndexed { i, (title, q) ->
             viewModelScope.launch {
                 ready.join()
                 val result: Load<List<Track>> = try {
-                    Load.Ready(Core.search(q, "songs").items.filterIsInstance<Item.TrackItem>().map { it.track }.filter { !it.live }.take(12))
+                    val first = Core.search(q, "songs")
+                    var songs = first.items.filterIsInstance<Item.TrackItem>().map { it.track }.filter(::isSingleSong)
+                    // Chart searches are full of compilations; one more page usually fills the shelf.
+                    if (songs.size < size && first.next != null) {
+                        songs = songs + Core.search(q, "songs", first.next).items.filterIsInstance<Item.TrackItem>().map { it.track }.filter(::isSingleSong)
+                    }
+                    Load.Ready(songs.distinctBy { it.id }.take(size))
                 } catch (e: CoreException) {
                     Load.Failed(e.message ?: "Couldn't load")
                 }
-                shelves = shelves.toMutableList().also { if (i < it.size) it[i] = Shelf(title, q, result) }
+                set(get().toMutableList().also { if (i < it.size) it[i] = Shelf(title, q, result) })
             }
         }
     }
+
+    // ---- Explore: new releases, charts for your region, trending (loaded the first time it opens) ----
+    var exploreShelves by mutableStateOf<List<Shelf>>(emptyList())
+        private set
+
+    fun loadExplore(force: Boolean = false) {
+        if (exploreShelves.isNotEmpty() && !force) return
+        val country = Locale.getDefault().displayCountry.ifBlank { "the world" }
+        val year = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+        fillShelves(
+            listOf(
+                "New releases" to "new music this week $year",
+                "Charts · $country" to "top hits this week official music video $year",
+                "Trending" to "trending music $year",
+                "Viral right now" to "viral songs $year",
+            ),
+            { exploreShelves },
+            { exploreShelves = it },
+            size = 20,
+        )
+    }
+
+    // ---- Account sheet & recap ----
+    var accountOpen by mutableStateOf(false)
+
+    /** Your most-played artists and how many of your recent songs are theirs (from history). */
+    val recap: List<Pair<String, Int>>
+        get() = library.history.groupingBy { it.artist }.eachCount().entries
+            .sortedByDescending { it.value }.take(5).map { it.key to it.value }
+
+    /** Name for the account sheet and Speed dial header. */
+    val displayName: String get() = googleChannel ?: "You"
 
     // ---------------------------------------------------------------------------------------
     // Google account (optional): read-only import of the user's YouTube library

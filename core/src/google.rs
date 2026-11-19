@@ -154,7 +154,7 @@ pub fn track_from_playlist_item(v: &Value) -> Option<Track> {
 	let id = sn.get("resourceId").and_then(|r| s(r, "videoId")).or_else(|| v.get("contentDetails").and_then(|c| s(c, "videoId")))?;
 	let owner = s(sn, "videoOwnerChannelTitle")?;
 	let (title, artist) = music::split_title(&s(sn, "title")?, &owner);
-	Some(Track { id, title, artist, artist_id: s(sn, "videoOwnerChannelId"), thumbnail: thumb(sn), duration: None, duration_seconds: None, live: false })
+	Some(Track { id, title, artist, artist_id: s(sn, "videoOwnerChannelId"), thumbnail: thumb(sn), duration: None, duration_seconds: None, live: false, plays: None })
 }
 
 /// videos.list (liked videos) → Track, with duration.
@@ -173,6 +173,7 @@ pub fn track_from_video(v: &Value) -> Option<Track> {
 		duration: secs.map(|x| crate::api::fmt_duration(x as u64)),
 		duration_seconds: secs,
 		live: s(sn, "liveBroadcastContent").as_deref() == Some("live"),
+		plays: None,
 	})
 }
 

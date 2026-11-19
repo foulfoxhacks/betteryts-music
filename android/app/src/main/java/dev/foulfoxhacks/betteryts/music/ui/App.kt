@@ -120,6 +120,7 @@ fun App(vm: AppViewModel, player: PlayerController) {
             ) { data -> Snackbar(data, containerColor = Brand.Raised, contentColor = Brand.Paper) }
 
             vm.playlistPickerFor?.let { AddToPlaylistDialog(vm, it) }
+            if (vm.accountOpen) AccountSheet(vm)
             if (vm.joinRoomDialog) {
                 JoinRoomDialog(onDismiss = { vm.joinRoomDialog = false }) { code ->
                     vm.joinRoomDialog = false
@@ -145,6 +146,7 @@ private fun Screens(vm: AppViewModel, pad: PaddingValues) {
         Route.SettingsRoute -> SettingsScreen(vm, pad)
         null -> when (vm.tab) {
             Tab.Home -> HomeScreen(vm, pad)
+            Tab.Explore -> ExploreScreen(vm, pad)
             Tab.Search -> SearchScreen(vm, pad)
             Tab.Library -> LibraryScreen(vm, pad)
         }
@@ -157,7 +159,7 @@ private fun BottomBar(vm: AppViewModel, bottomInset: Dp) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(Brand.LineGold))
         Row(Modifier.fillMaxWidth().height(NAV_HEIGHT - 1.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             NavItem(vm, Tab.Home, "Home", AppIcons.Home)
-            NavItem(vm, Tab.Search, "Search", AppIcons.Search)
+            NavItem(vm, Tab.Explore, "Explore", AppIcons.Explore)
             NavItem(vm, Tab.Library, "Library", AppIcons.Library)
         }
         Box(Modifier.fillMaxWidth().height(bottomInset))

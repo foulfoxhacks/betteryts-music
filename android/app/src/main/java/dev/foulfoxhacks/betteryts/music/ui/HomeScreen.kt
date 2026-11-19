@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -86,7 +87,7 @@ fun BrandTopBar(vm: AppViewModel, top: Dp) {
             Text("BY FOULFOXHACKS", color = Brand.Tan, fontWeight = FontWeight.ExtraBold, fontSize = 9.sp, letterSpacing = 1.5.sp)
         }
         IconButton(onClick = { vm.selectTab(Tab.Search) }) { Icon(AppIcons.Search, "Search", tint = Brand.Paper) }
-        IconButton(onClick = { vm.openSettings() }) { Icon(AppIcons.Settings, "Settings", tint = Brand.Paper) }
+        Box(Modifier.padding(horizontal = 8.dp)) { Avatar(vm, 34) { vm.accountOpen = true } }
     }
 }
 
@@ -116,6 +117,10 @@ fun HomeScreen(vm: AppViewModel, pad: PaddingValues) {
                 DisplayTitle("Listen now", size = 40, maxLines = 1)
             }
         }
+
+        // Speed dial: what you play most, nine at a time.
+        val dial = (lib.history + lib.favorites).distinctBy { it.id }.take(27)
+        if (dial.size >= 3) item { SpeedDial(vm, dial) }
 
         if (quickPicks.isNotEmpty()) {
             shelfHeader("Start radio from a song", "Quick picks", action = "Play all") { vm.playTracks(quickPicks, 0) }
@@ -241,5 +246,67 @@ private fun QuickPicks(vm: AppViewModel, tracks: List<Track>) {
                 }
             }
         }
+    }
+}
+
+/** YouTube Music's Speed dial in the BetterYTS look: square tiles, nine per page, page dots. */
+@Composable
+private fun SpeedDial(vm: AppViewModel, tracks: List<Track>) {
+    val pages = tracks.chunked(9)
+    val pager = androidx.compose.foundation.pager.rememberPagerState { pages.size }
+    Column(Modifier.padding(top = 14.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clickable { vm.selectTab(Tab.Library) }.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Avatar(vm, 40)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Eyebrow(vm.displayName)
+                Text("Speed dial", color = Brand.Paper, fontWeight = FontWeight.Black, fontSize = 24.sp)
+            }
+            Icon(AppIcons.Chevron, "Open your library", tint = Brand.Paper)
+        }
+        androidx.compose.foundation.pager.HorizontalPager(
+            state = pager,
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            pageSpacing = 12.dp,
+        ) { p ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                pages[p].chunked(3).forEachIndexed { r, row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEachIndexed { c, t ->
+                            val index = p * 9 + r * 3 + c
+                            DialTile(t, Modifier.weight(1f)) { vm.playTracks(tracks, index) }
+                        }
+                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+        if (pages.size > 1) {
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.Center) {
+                pages.indices.forEach { i ->
+                    Box(Modifier.padding(horizontal = 4.dp).size(8.dp).clip(CircleShape).background(if (pager.currentPage == i) Brand.Paper else Brand.Muted.copy(alpha = 0.35f)))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialTile(t: Track, modifier: Modifier, onClick: () -> Unit) {
+    Box(modifier.aspectRatio(1f).clickable(onClick = onClick)) {
+        RemoteImage(t.largeArt, Modifier.fillMaxSize())
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Color(0xE6000000))))
+        Text(
+            t.title,
+            Modifier.align(Alignment.BottomStart).padding(8.dp),
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            lineHeight = 16.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }

@@ -24,6 +24,8 @@ data class Track(
     val duration: String? = null,
     val durationSeconds: Int? = null,
     val live: Boolean = false,
+    /** "8.8M plays", when YouTube gave a view count. */
+    val plays: String? = null,
 ) {
     /** Cover art. YouTube's 320×180 thumbnail always exists; the UI crops it square. */
     val art: String get() = thumbnail ?: "https://i.ytimg.com/vi/$id/mqdefault.jpg"
@@ -31,7 +33,7 @@ data class Track(
     /** Bigger art for the player screen. */
     val largeArt: String get() = thumbnail ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"
 
-    val subtitle: String get() = listOfNotNull(artist, if (live) "LIVE" else duration).joinToString(" · ")
+    val subtitle: String get() = listOfNotNull(artist, plays, if (live) "LIVE" else duration).joinToString(" · ")
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -42,6 +44,7 @@ data class Track(
         duration?.let { put("duration", it) }
         durationSeconds?.let { put("durationSeconds", it) }
         put("live", live)
+        plays?.let { put("plays", it) }
     }
 
     companion object {
@@ -56,6 +59,7 @@ data class Track(
                 duration = o.str("duration"),
                 durationSeconds = if (o.has("durationSeconds") && !o.isNull("durationSeconds")) o.optInt("durationSeconds") else null,
                 live = o.optBoolean("live"),
+                plays = o.str("plays"),
             )
         }
 

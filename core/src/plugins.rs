@@ -370,7 +370,7 @@ mod tests {
 
 	#[test]
 	fn protv_text() {
-		let t = Track { id: "FGBhQbmPwH8".into(), title: "One More\nTime".into(), artist: "#Daft Punk".into(), artist_id: None, thumbnail: None, duration: Some("5:21".into()), duration_seconds: None, live: false };
+		let t = Track { id: "FGBhQbmPwH8".into(), title: "One More\nTime".into(), artist: "#Daft Punk".into(), artist_id: None, thumbnail: None, duration: Some("5:21".into()), duration_seconds: None, live: false, plays: None };
 		let txt = protv_playlist("@queue", &[t]);
 		assert_eq!(txt, "\u{200b}@queue\n\n@https://www.youtube.com/watch?v=FGBhQbmPwH8\n~One More Time\n\u{200b}#Daft Punk · 5:21\n");
 	}
@@ -379,7 +379,7 @@ mod tests {
 	#[test]
 	#[ignore]
 	fn live_lyrics() {
-		let t = Track { id: "FGBhQbmPwH8".into(), title: "One More Time".into(), artist: "Daft Punk".into(), artist_id: None, thumbnail: None, duration: None, duration_seconds: Some(320), live: false };
+		let t = Track { id: "FGBhQbmPwH8".into(), title: "One More Time".into(), artist: "Daft Punk".into(), artist_id: None, thumbnail: None, duration: None, duration_seconds: Some(320), live: false, plays: None };
 		let l = lyrics(&t).unwrap().expect("lyrics found");
 		assert!(l.synced.len() > 10);
 	}
