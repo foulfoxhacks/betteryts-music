@@ -307,6 +307,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let (code, service): (String, String) = (arg(a, "code")?, arg(a, "service")?);
 			let ids: Vec<String> = arg(a, "playlistIds")?;
 			let include_liked: bool = arg::<Option<bool>>(a, "liked")?.unwrap_or(false);
+			let save: bool = arg::<Option<bool>>(a, "save")?.unwrap_or(false);
 			let lists = with_state(|s| {
 				let mut out: Vec<(String, Vec<Track>)> = Vec::new();
 				if include_liked && !s.store.lib.favorites.is_empty() {
@@ -317,7 +318,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				}
 				Ok(out)
 			})?;
-			let (playlists, tracks) = crate::inworld::send(&api(), &code, &service, "", &lists)?;
+			let (playlists, tracks) = crate::inworld::send(&api(), &code, &service, save, &lists)?;
 			Ok(json!({ "playlists": playlists, "tracks": tracks }))
 		}
 		"qr" => {

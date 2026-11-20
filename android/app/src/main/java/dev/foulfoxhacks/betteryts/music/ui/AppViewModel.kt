@@ -909,13 +909,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
     }
 
-    fun sendToWorld(playlistIds: List<String>, liked: Boolean) = viewModelScope.launch {
+    fun sendToWorld(playlistIds: List<String>, liked: Boolean, save: Boolean) = viewModelScope.launch {
         ready.join()
         val code = worldSend.checkedCode ?: return@launch
         worldSend = worldSend.copy(busy = true, error = null)
         worldSend = try {
-            val (lists, songs) = Core.inworldSend(code, worldSend.service, playlistIds, liked)
-            worldSend.copy(busy = false, sent = "Sent $lists playlist${if (lists == 1) "" else "s"} ($songs songs). Look at the world: they show up within a few seconds.")
+            val (lists, songs) = Core.inworldSend(code, worldSend.service, playlistIds, liked, save)
+            val kept = if (save) " Saved for your next visit for up to 30 days; Unlink in the world deletes it." else " Just this visit: nothing is kept once the code expires."
+            worldSend.copy(busy = false, sent = "Sent $lists playlist${if (lists == 1) "" else "s"} ($songs songs). Look at the world: they show up within a few seconds.$kept")
         } catch (e: CoreException) {
             worldSend.copy(busy = false, error = e.message)
         }

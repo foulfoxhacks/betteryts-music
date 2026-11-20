@@ -28,13 +28,15 @@ pub fn check(api: &Api, input: &str) -> Result<CodeInfo, String> {
 }
 
 /// Sends playlists (name, tracks) to the world waiting on `code`. Returns (playlists, tracks) sent.
-pub fn send(api: &Api, code: &str, service: &str, account: &str, playlists: &[(String, Vec<Track>)]) -> Result<(u64, u64), String> {
+/// `save`: keep it for the player's next visit (30 days); otherwise it's for this visit only.
+/// Only song IDs, titles and channels are sent, never account details.
+pub fn send(api: &Api, code: &str, service: &str, save: bool, playlists: &[(String, Vec<Track>)]) -> Result<(u64, u64), String> {
 	let code = normalize(code).ok_or("Codes look like ABCD-1234 (letters and numbers)")?;
 	let body = json!({
 		"code": code,
 		"service": service,
+		"save": save,
 		"library": {
-			"account": account,
 			"playlists": playlists.iter().take(20).map(|(name, tracks)| json!({
 				"name": name,
 				"tracks": tracks.iter().take(200).map(|t| json!({ "id": t.id, "title": t.title, "channel": t.artist })).collect::<Vec<_>>(),

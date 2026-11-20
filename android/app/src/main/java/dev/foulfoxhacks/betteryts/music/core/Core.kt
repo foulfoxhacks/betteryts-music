@@ -237,8 +237,8 @@ object Core {
     }
 
     /** Sends library playlists (by ID, plus liked songs) to that world: (playlists, songs) sent. */
-    suspend fun inworldSend(code: String, service: String, playlistIds: List<String>, liked: Boolean): Pair<Int, Int> {
-        val o = obj("inworld.send", args("code" to code, "service" to service, "playlistIds" to org.json.JSONArray(playlistIds), "liked" to liked))
+    suspend fun inworldSend(code: String, service: String, playlistIds: List<String>, liked: Boolean, save: Boolean): Pair<Int, Int> {
+        val o = obj("inworld.send", args("code" to code, "service" to service, "playlistIds" to org.json.JSONArray(playlistIds), "liked" to liked, "save" to save))
         return o.optInt("playlists") to o.optInt("tracks")
     }
 

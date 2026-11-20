@@ -35,6 +35,7 @@ fun VrchatSendCard(vm: AppViewModel) {
     var code by remember(s.prefill) { mutableStateOf(s.prefill) }
     val picked = remember { mutableStateListOf<String>() }
     var liked by remember { mutableStateOf(true) }
+    var save by remember { mutableStateOf(false) }
     val colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Line, cursorColor = Brand.Gold, focusedTextColor = Brand.Paper, unfocusedTextColor = Brand.Paper)
 
     Column(
@@ -53,14 +54,15 @@ fun VrchatSendCard(vm: AppViewModel) {
             BrandButton(if (s.checkedCode != null) "Checked" else "Check", { vm.checkWorldCode(code) }, primary = s.checkedCode == null, enabled = !s.busy && code.isNotBlank())
         }
         if (s.checkedCode != null) {
-            Text("Pick what to send (up to 20 playlists, 200 songs each). Only send what you're OK sharing: anyone with your world library number could load it.", color = Brand.Muted, fontSize = 12.sp)
+            Text("Pick what to send (up to 20 playlists, 200 songs each). Only the songs' video IDs, titles and channels are sent, never your account.", color = Brand.Muted, fontSize = 12.sp)
             if (vm.library.favorites.isNotEmpty()) {
                 PickRow("Liked songs · ${vm.library.favorites.size}", liked) { liked = it }
             }
             vm.library.playlists.forEach { p ->
                 PickRow("${p.name} · ${p.tracks.size}", p.id in picked) { on -> if (on) picked.add(p.id) else picked.remove(p.id) }
             }
-            BrandButton(if (s.busy) "Sending…" else "Send to the world", { vm.sendToWorld(picked.toList(), liked) }, primary = true, enabled = !s.busy && (picked.isNotEmpty() || (liked && vm.library.favorites.isNotEmpty())))
+            PickRow("Save for my next visit (up to 30 days; Unlink deletes it). Off: just this visit.", save) { save = it }
+            BrandButton(if (s.busy) "Sending…" else "Send to the world", { vm.sendToWorld(picked.toList(), liked, save) }, primary = true, enabled = !s.busy && (picked.isNotEmpty() || (liked && vm.library.favorites.isNotEmpty())))
         }
         s.error?.let { Text(it, color = Brand.Ember, fontSize = 13.sp) }
     }
