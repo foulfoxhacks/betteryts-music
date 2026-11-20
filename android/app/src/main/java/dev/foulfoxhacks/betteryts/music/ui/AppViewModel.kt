@@ -872,6 +872,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun pluginOn(id: String) = settings.on(id)
 
+    /** Settings › Backup: write the backup to a file the user picked (Storage Access Framework). */
+    fun exportBackup(uri: android.net.Uri) = io {
+        val app = getApplication<Application>()
+        val version = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() ?: ""
+        val text = Core.backupExport(version ?: "")
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            app.contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) } ?: throw CoreException("Couldn't write the file")
+        }
+        message = "Backup saved. It also imports on the website (Settings › Backup)."
+    }
+
+    fun importBackup(uri: android.net.Uri) = io {
+        val app = getApplication<Application>()
+        val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            app.contentResolver.openInputStream(uri)?.use { s -> s.readBytes().takeIf { it.size <= 5_000_000 }?.toString(Charsets.UTF_8) }
+        } ?: throw CoreException("That file is too big to be a BetterYTS backup")
+        val (sum, newSettings) = Core.backupImport(text)
+        settings = newSettings
+        applyPlugins()
+        library = Core.library()
+        refreshFeed()
+        val parts = listOf("favoritesAdded" to "liked songs", "playlistsAdded" to "playlists", "playlistsUpdated" to "playlists updated", "artistsAdded" to "artists", "historyAdded" to "history", "pluginsInstalled" to "plugins")
+            .mapNotNull { (k, label) -> sum.optInt(k).takeIf { it > 0 }?.let { "$it $label" } }
+        message = if (parts.isEmpty()) "Backup checked: nothing new to add" else "Imported " + parts.joinToString(", ")
+    }
+
     /** Settings › Hidden: comma- or line-separated lists, cleaned by the core. */
     fun setHidden(channels: String, words: String) = io {
         fun split(s: String) = s.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }

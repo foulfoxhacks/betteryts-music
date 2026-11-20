@@ -282,6 +282,19 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				Ok(s.settings.settings.view())
 			})
 		}
+		"backup.export" => {
+			let version: String = arg::<Option<String>>(a, "appVersion")?.unwrap_or_default();
+			with_state(|s| Ok(json!({ "text": crate::backup::export(&s.store.lib, &s.settings.settings, &version, Store::now()).to_string() })))
+		}
+		"backup.import" => {
+			let text: String = arg(a, "text")?;
+			with_state(|s| {
+				let sum = crate::backup::import(&text, &mut s.store, &mut s.settings.settings)?;
+				s.store.save()?;
+				s.settings.save()?;
+				Ok(json!({ "summary": sum, "settings": s.settings.settings.view() }))
+			})
+		}
 		"qr" => {
 			let q = crate::qr::encode(&arg::<String>(a, "text")?)?;
 			Ok(json!({ "size": q.size, "rows": q.rows() }))

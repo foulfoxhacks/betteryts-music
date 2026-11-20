@@ -204,6 +204,15 @@ object Core {
     /** Installs a community plugin from its manifest (JSON text); throws [CoreException] with the reason if refused. */
     suspend fun installPlugin(manifest: String) = settingsFrom(obj("plugins.install", args("manifest" to manifest)))
     suspend fun removePlugin(id: String) = settingsFrom(obj("plugins.remove", args("id" to id)))
+    /** The library and settings as a backup file (same format as the website's Settings › Backup). */
+    suspend fun backupExport(appVersion: String): String = obj("backup.export", args("appVersion" to appVersion)).optString("text")
+
+    /** Merges a backup (from the site or the app); returns a summary and the new settings. */
+    suspend fun backupImport(text: String): Pair<JSONObject, Settings> {
+        val o = obj("backup.import", args("text" to text))
+        return (o.optJSONObject("summary") ?: JSONObject()) to settingsFrom(o.optJSONObject("settings") ?: JSONObject())
+    }
+
     /** A QR code as rows of "0"/"1" (core/src/qr.rs, same encoder as the website). */
     suspend fun qr(text: String): List<String> {
         val a = obj("qr", args("text" to text)).optJSONArray("rows") ?: return emptyList()

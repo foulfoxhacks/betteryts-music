@@ -105,6 +105,9 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             }
             item(key = "community-install") { CommunityInstallCard(vm) }
 
+            item { SectionHeader("Backup") }
+            item { BackupCard(vm) }
+
             item { SectionHeader("Hidden") }
             item { HiddenCard(vm) }
 
@@ -203,5 +206,23 @@ private fun HiddenCard(vm: AppViewModel) {
         androidx.compose.material3.OutlinedTextField(words, { words = it }, Modifier.fillMaxWidth(), label = { Text("Words") }, placeholder = { Text("sped up, nightcore", color = Brand.Muted) }, colors = colors)
         val changed = channels != vm.settings.hiddenChannels.joinToString(", ") || words != vm.settings.hiddenWords.joinToString(", ")
         BrandButton("Save", { vm.setHidden(channels, words) }, primary = true, enabled = changed)
+    }
+}
+
+/** Save or load a backup file: the same format as the website's, so libraries move both ways. */
+@androidx.compose.runtime.Composable
+private fun BackupCard(vm: AppViewModel) {
+    val save = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")) { uri -> uri?.let(vm::exportBackup) }
+    val open = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importBackup) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Liked songs, playlists, followed artists, history, hidden lists and community plugins in one file. It works both ways with the website (yts.foulfoxhacks.dev › Settings › Backup). Importing adds to what's here; it never deletes.",
+            color = Brand.Muted,
+            fontSize = 13.sp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BrandButton("Export", { save.launch("betteryts-backup-${java.time.LocalDate.now()}.json") }, primary = true)
+            BrandButton("Import", { open.launch(arrayOf("application/json", "text/plain", "*/*")) })
+        }
     }
 }

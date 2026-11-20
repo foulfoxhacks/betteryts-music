@@ -21,6 +21,7 @@ pub mod queue;
 pub mod radio;
 pub mod spotify;
 pub mod qr;
+pub mod backup;
 #[cfg(test)]
 mod qr_fixtures;
 
