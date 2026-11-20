@@ -157,7 +157,12 @@ object Core {
         val plugins: List<PluginInfo> = emptyList(),
         val categories: List<Category> = emptyList(),
         val permissionText: Map<String, String> = emptyMap(),
+        /** Never shown: artists/channels (name, @handle or ID) and songs with these words. */
+        val hiddenChannels: List<String> = emptyList(),
+        val hiddenWords: List<String> = emptyList(),
     ) {
+        private fun compact(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+        fun hidesArtist(name: String, id: String?) = hiddenChannels.any { c -> compact(c).let { it.isNotEmpty() && (it == compact(name) || (id != null && it == compact(id))) } }
         fun on(id: String) = plugins.any { it.id == id && it.active }
         val activeCommunity get() = plugins.filter { it.community && it.active }
     }
@@ -187,7 +192,8 @@ object Core {
             Category(it.str("id") ?: return@mapObjects null, it.str("name") ?: "", it.str("description") ?: "", it.optBoolean("community"), it.optBoolean("enabled", true))
         }
         val permissionText = o.optJSONArray("permissions").mapObjects { (it.str("id") ?: return@mapObjects null) to (it.str("text") ?: "") }.toMap()
-        return Settings(o.str("theme") ?: "ember", themes, plugins, categories, permissionText)
+        fun strings(key: String) = o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
+        return Settings(o.str("theme") ?: "ember", themes, plugins, categories, permissionText, strings("hiddenChannels"), strings("hiddenWords"))
     }
 
     suspend fun settings() = settingsFrom(obj("settings.get"))
@@ -198,6 +204,9 @@ object Core {
     /** Installs a community plugin from its manifest (JSON text); throws [CoreException] with the reason if refused. */
     suspend fun installPlugin(manifest: String) = settingsFrom(obj("plugins.install", args("manifest" to manifest)))
     suspend fun removePlugin(id: String) = settingsFrom(obj("plugins.remove", args("id" to id)))
+    suspend fun setHidden(channels: List<String>, words: List<String>) =
+        settingsFrom(obj("settings.hidden", args("channels" to org.json.JSONArray(channels), "words" to org.json.JSONArray(words))))
+    suspend fun toggleHiddenArtist(name: String, id: String?) = settingsFrom(obj("settings.hideArtist", args("name" to name, "id" to id)))
 
     data class Segment(val start: Float, val end: Float)
 

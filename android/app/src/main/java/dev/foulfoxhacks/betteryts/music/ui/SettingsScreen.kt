@@ -22,6 +22,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -103,6 +105,9 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             }
             item(key = "community-install") { CommunityInstallCard(vm) }
 
+            item { SectionHeader("Hidden") }
+            item { HiddenCard(vm) }
+
             item { SectionHeader("YouTube account") }
             item { GoogleCard(vm) }
 
@@ -183,5 +188,20 @@ private fun PluginRow(p: Core.PluginInfo, onToggle: (Boolean) -> Unit) {    Row(
             onCheckedChange = onToggle,
             colors = SwitchDefaults.colors(checkedThumbColor = Brand.GoldInk, checkedTrackColor = Brand.Gold, uncheckedTrackColor = Brand.Raised, uncheckedThumbColor = Brand.Muted, uncheckedBorderColor = Brand.Line),
         )
+    }
+}
+
+/** Artists/channels and words that never show in search, radio or the feed (same as the website's). */
+@androidx.compose.runtime.Composable
+private fun HiddenCard(vm: AppViewModel) {
+    var channels by androidx.compose.runtime.saveable.rememberSaveable(vm.settings.hiddenChannels) { androidx.compose.runtime.mutableStateOf(vm.settings.hiddenChannels.joinToString(", ")) }
+    var words by androidx.compose.runtime.saveable.rememberSaveable(vm.settings.hiddenWords) { androidx.compose.runtime.mutableStateOf(vm.settings.hiddenWords.joinToString(", ")) }
+    val colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Line, cursorColor = Brand.Gold, focusedTextColor = Brand.Paper, unfocusedTextColor = Brand.Paper)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Never show these in search, radio or your feed. Separate with commas. Tip: an artist page has a Hide button.", color = Brand.Muted, fontSize = 13.sp)
+        androidx.compose.material3.OutlinedTextField(channels, { channels = it }, Modifier.fillMaxWidth(), label = { Text("Artists or channels") }, placeholder = { Text("@handle or name", color = Brand.Muted) }, colors = colors)
+        androidx.compose.material3.OutlinedTextField(words, { words = it }, Modifier.fillMaxWidth(), label = { Text("Words") }, placeholder = { Text("sped up, nightcore", color = Brand.Muted) }, colors = colors)
+        val changed = channels != vm.settings.hiddenChannels.joinToString(", ") || words != vm.settings.hiddenWords.joinToString(", ")
+        BrandButton("Save", { vm.setHidden(channels, words) }, primary = true, enabled = changed)
     }
 }

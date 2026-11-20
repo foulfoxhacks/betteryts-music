@@ -90,6 +90,7 @@ fun ArtistScreen(vm: AppViewModel, route: Route.ArtistRoute, pad: PaddingValues)
                             onShuffle = { vm.playTracks(page.tracks, 0, shuffle = true) },
                         ) {
                             BrandButton(if (following) "Following" else "Follow", { vm.toggleFollow(page.artist) }, primary = false)
+                            BrandButton(if (vm.settings.hidesArtist(page.artist.name, page.artist.id)) "Unhide" else "Hide", { vm.toggleHideArtist(page.artist) }, primary = false)
                         }
                         SectionHeader("Songs")
                     }

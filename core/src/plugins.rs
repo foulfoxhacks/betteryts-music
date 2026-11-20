@@ -261,6 +261,27 @@ pub struct Settings {
 	/// Only categories the user has switched; the rest are on.
 	pub categories: BTreeMap<String, bool>,
 	pub community: Vec<CommunityPlugin>,
+	/// Never show these artists/channels (name, @handle or channel ID) or songs with these words.
+	/// Same matching as the website's Settings › Results.
+	pub hidden_channels: Vec<String>,
+	pub hidden_words: Vec<String>,
+}
+
+/// Letters and digits only, lowercased: "@LofiGirl", "lofigirl" and "Lofi Girl" are the same.
+pub fn compact(s: &str) -> String {
+	s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+fn clean_list(items: &[String], max: usize) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	for i in items {
+		let t: String = i.chars().filter(|c| !c.is_control()).collect::<String>().trim().trim_start_matches('@').chars().take(100).collect();
+		if !t.is_empty() && !out.iter().any(|x| compact(x) == compact(&t)) {
+			out.push(t);
+		}
+	}
+	out.truncate(max);
+	out
 }
 
 impl Settings {
@@ -325,6 +346,48 @@ impl Settings {
 		self.community.len() != before
 	}
 
+	pub fn set_hidden(&mut self, channels: &[String], words: &[String]) {
+		self.hidden_channels = clean_list(channels, 200);
+		self.hidden_words = clean_list(words, 200).into_iter().map(|w| w.to_lowercase()).collect();
+	}
+
+	/// Hides or unhides an artist; returns true if it's hidden now.
+	pub fn toggle_hidden_artist(&mut self, name: &str, id: Option<&str>) -> bool {
+		let keys: Vec<String> = [Some(name), id].into_iter().flatten().map(compact).filter(|k| !k.is_empty()).collect();
+		let hidden = self.hidden_channels.iter().any(|c| keys.contains(&compact(c)));
+		if hidden {
+			self.hidden_channels.retain(|c| !keys.contains(&compact(c)));
+		} else {
+			let mut add = vec![name.to_string()];
+			if let Some(id) = id {
+				add.push(id.to_string());
+			}
+			let all: Vec<String> = self.hidden_channels.iter().cloned().chain(add).collect();
+			self.hidden_channels = clean_list(&all, 200);
+		}
+		!hidden
+	}
+
+	fn hides_channel(&self, names: &[Option<&str>]) -> bool {
+		if self.hidden_channels.is_empty() {
+			return false;
+		}
+		let hidden: Vec<String> = self.hidden_channels.iter().map(|c| compact(c)).collect();
+		names.iter().flatten().map(|n| compact(n)).any(|n| !n.is_empty() && hidden.contains(&n))
+	}
+
+	pub fn hides_track(&self, t: &Track) -> bool {
+		if self.hides_channel(&[Some(t.artist.as_str()), t.artist_id.as_deref()]) {
+			return true;
+		}
+		let text = format!("{} {}", t.title, t.artist).to_lowercase();
+		self.hidden_words.iter().any(|w| text.contains(w.as_str()))
+	}
+
+	pub fn hides_artist(&self, a: &crate::model::Artist) -> bool {
+		self.hides_channel(&[Some(a.name.as_str()), Some(a.id.as_str()), a.handle.as_deref()])
+	}
+
 	pub fn set_theme(&mut self, id: &str) -> bool {
 		if !THEMES.iter().any(|(t, _)| *t == id) {
 			return false;
@@ -355,6 +418,8 @@ impl Settings {
 				v
 			}).collect::<Vec<_>>(),
 			"permissions": PERMISSIONS.iter().map(|(id, text)| json!({ "id": id, "text": text })).collect::<Vec<_>>(),
+			"hiddenChannels": self.hidden_channels,
+			"hiddenWords": self.hidden_words,
 		})
 	}
 }
@@ -556,6 +621,24 @@ pub fn protv_playlist(name: &str, tracks: &[Track]) -> String {
 #[cfg(test)]
 mod tests {
 	const PANEL: &str = r#"{"id":"song-clock","name":"Song clock","category":"Player","permissions":["nowPlaying","panel"],"code":"betteryts.on('nowPlaying', n => betteryts.panel(n.title))"}"#;
+
+	#[test]
+	fn hidden_channels_and_words() {
+		let mut s = Settings::default();
+		let t = |title: &str, artist: &str, id: Option<&str>| -> Track { serde_json::from_value(json!({ "id": "aaaaaaaaaaa", "title": title, "artist": artist, "artistId": id })).unwrap() };
+		assert!(!s.hides_track(&t("Song", "Lofi Girl", None)));
+		s.set_hidden(&["@LofiGirl".into(), " ".into(), "lofi girl".into()], &["Reaction".into()]);
+		assert_eq!(s.hidden_channels, vec!["LofiGirl"], "cleaned and de-duplicated");
+		assert!(s.hides_track(&t("Song", "Lofi Girl", None)), "a handle matches the display name");
+		assert!(s.hides_track(&t("My REACTION to it", "Someone", None)));
+		assert!(!s.hides_track(&t("Song", "Someone", Some("UCabc"))));
+		assert!(s.toggle_hidden_artist("Someone", Some("UCabc")));
+		assert!(s.hides_track(&t("Other", "Renamed", Some("UCabc"))), "the channel ID catches renames");
+		assert!(!s.toggle_hidden_artist("Someone", Some("UCabc")));
+		assert!(!s.hides_track(&t("Other", "Renamed", Some("UCabc"))));
+		let old: Settings = serde_json::from_str(r#"{"theme":"ember"}"#).unwrap();
+		assert!(old.hidden_channels.is_empty(), "older settings files still load");
+	}
 
 	#[test]
 	fn categories_gate_their_plugins() {

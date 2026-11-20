@@ -82,15 +82,38 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 		}
 
 		// ---- browse ----
-		"search" => to_value(api().search(&arg::<String>(a, "query")?, Filter::parse(opt_str(a, "filter").unwrap_or("all")), opt_str(a, "page"))?),
+		"search" => {
+			let mut page = api().search(&arg::<String>(a, "query")?, Filter::parse(opt_str(a, "filter").unwrap_or("all")), opt_str(a, "page"))?;
+			with_state(|s| {
+				let st = &s.settings.settings;
+				page.items.retain(|i| match i {
+					crate::model::Item::Track(t) => !st.hides_track(t),
+					crate::model::Item::Artist(ar) => !st.hides_artist(ar),
+					_ => true,
+				});
+				Ok(())
+			})?;
+			to_value(page)
+		}
 		"suggest" => to_value(api().suggest(&arg::<String>(a, "query")?)?),
 		"video" => to_value(api().video(&arg::<String>(a, "id")?)?),
-		"radio" => to_value(radio::radio(&arg::<String>(a, "id")?, opt_str(a, "next"), &api().region)?),
+		"radio" => {
+			let mut page = radio::radio(&arg::<String>(a, "id")?, opt_str(a, "next"), &api().region)?;
+			with_state(|s| {
+				page.tracks.retain(|t| !s.settings.settings.hides_track(t));
+				Ok(())
+			})?;
+			to_value(page)
+		}
 		"playlist" => to_value(api().playlist(&arg::<String>(a, "id")?, opt_str(a, "page"))?),
 		"artist" => to_value(api().artist(&arg::<String>(a, "id")?, opt_str(a, "page"))?),
 		"feed" => {
 			let followed = with_state(|s| Ok(s.store.lib.followed.clone()))?;
-			let (tracks, failed) = api().feed(&followed, 60);
+			let (mut tracks, failed) = api().feed(&followed, 60);
+			with_state(|s| {
+				tracks.retain(|t| !s.settings.settings.hides_track(t));
+				Ok(())
+			})?;
 			Ok(json!({ "tracks": to_value(tracks)?, "failed": failed }))
 		}
 		"resolveLink" => to_value(links::resolve(&arg::<String>(a, "text")?)),
@@ -238,6 +261,23 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				if !s.settings.settings.set_plugin(&id, on) {
 					return Err(format!("Unknown plugin `{id}`"));
 				}
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
+		"settings.hidden" => {
+			let (channels, words): (Vec<String>, Vec<String>) = (arg(a, "channels")?, arg(a, "words")?);
+			with_state(|s| {
+				s.settings.settings.set_hidden(&channels, &words);
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
+		"settings.hideArtist" => {
+			let name: String = arg(a, "name")?;
+			let id = opt_str(a, "id").map(String::from);
+			with_state(|s| {
+				s.settings.settings.toggle_hidden_artist(&name, id.as_deref());
 				s.settings.save()?;
 				Ok(s.settings.settings.view())
 			})

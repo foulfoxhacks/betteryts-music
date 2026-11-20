@@ -872,6 +872,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun pluginOn(id: String) = settings.on(id)
 
+    /** Settings › Hidden: comma- or line-separated lists, cleaned by the core. */
+    fun setHidden(channels: String, words: String) = io {
+        fun split(s: String) = s.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+        settings = Core.setHidden(split(channels), split(words))
+        message = "Hidden lists saved"
+        refreshFeed()
+    }
+
+    fun toggleHideArtist(artist: Artist) = io {
+        settings = Core.toggleHiddenArtist(artist.name, artist.id)
+        message = if (settings.hidesArtist(artist.name, artist.id)) "${artist.name} is hidden from search, radio and your feed" else "${artist.name} is shown again"
+        refreshFeed()
+    }
+
     /** Per-song plugin data, keyed by video ID. */
     private val segmentsFor = HashMap<String, List<Core.Segment>>()
     private var skippedUntil = 0f
