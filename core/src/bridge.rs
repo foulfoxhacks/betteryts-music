@@ -282,6 +282,10 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				Ok(s.settings.settings.view())
 			})
 		}
+		"qr" => {
+			let q = crate::qr::encode(&arg::<String>(a, "text")?)?;
+			Ok(json!({ "size": q.size, "rows": q.rows() }))
+		}
 		"plugins.category" => {
 			let (id, on): (String, bool) = (arg(a, "id")?, arg(a, "enabled")?);
 			with_state(|s| {

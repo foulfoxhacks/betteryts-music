@@ -84,6 +84,8 @@ fun App(vm: AppViewModel, player: PlayerController) {
                     Screens(vm, PaddingValues(top = top, bottom = 24.dp))
                 }
                 if (current != null) MiniPlayer(vm, player, current, MINI_HEIGHT, MINI_VIDEO_WIDTH)
+                // In a room with nothing playing there's no player to hold the room card.
+                else if (vm.room != null) RoomIdleBar(vm)
                 BottomBar(vm, bottom)
             }
             // Status-bar backing: scrolled content never sits under the clock.

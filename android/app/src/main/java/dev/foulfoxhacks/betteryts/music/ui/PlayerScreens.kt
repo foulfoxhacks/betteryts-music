@@ -422,6 +422,11 @@ private fun LazyListScope.roomPanel(vm: AppViewModel) {
                     copyText(context, "VRChat room link", vm.roomVrchatLink(r.code))
                     vm.message = "Copied. Paste into a VRChat video player to follow the room."
                 })
+                BrandButton(if (RoomQrHolder.show) "Hide QR" else "QR", { RoomQrHolder.show = !RoomQrHolder.show })
+            }
+            if (RoomQrHolder.show) {
+                QrCode(vm.roomInviteLink(r.code), Modifier.padding(top = 4.dp).size(200.dp))
+                Text("Scan to join on a phone (web or app).", color = Brand.Muted, fontSize = 12.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (vm.roomIsHost) BrandButton(if (s?.locked == true) "Unlock" else "Host only", { vm.toggleRoomLock() })
@@ -495,5 +500,39 @@ private fun Controls(vm: AppViewModel, player: PlayerController) {
             }
             Icon(icon, label, tint = if (q.repeat == Repeat.Off) Brand.Muted else Brand.Gold)
         }
+    }
+}
+
+/** Shown above the bottom bar while in a room that has nothing playing (the full player needs a song). */
+@Composable
+fun RoomIdleBar(vm: AppViewModel) {
+    val r = vm.room ?: return
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxWidth().background(Brand.CardGradient).border(1.dp, Brand.LineGold).padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.background(Brand.Gold).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                Text(r.code, color = Brand.GoldInk, fontWeight = FontWeight.Black, fontSize = 15.sp, letterSpacing = 2.sp)
+            }
+            Text(
+                listOf("Listen Together", vm.roomMembers, vm.roomStatus).filter { it.isNotBlank() }.joinToString(" · "),
+                Modifier.padding(start = 10.dp).weight(1f),
+                color = Brand.Muted,
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
+        }
+        Text("Nothing playing yet. Pick a song and use ⋮ → Add to queue (or Play) to start the room.", color = Brand.Paper, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BrandButton("Invite", {
+                copyText(context, "Room invite", vm.roomInviteLink(r.code))
+                vm.message = "Invite link copied: it opens on the web or in the app"
+            })
+            BrandButton(if (RoomQrHolder.show) "Hide QR" else "QR", { RoomQrHolder.show = !RoomQrHolder.show })
+            BrandButton("Leave", { vm.leaveRoom() })
+        }
+        if (RoomQrHolder.show) QrCode(vm.roomInviteLink(r.code), Modifier.size(160.dp))
     }
 }

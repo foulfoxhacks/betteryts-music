@@ -20,5 +20,8 @@ pub mod plugins;
 pub mod queue;
 pub mod radio;
 pub mod spotify;
+pub mod qr;
+#[cfg(test)]
+mod qr_fixtures;
 
 mod jni_entry;

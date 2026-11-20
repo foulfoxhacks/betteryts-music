@@ -204,6 +204,12 @@ object Core {
     /** Installs a community plugin from its manifest (JSON text); throws [CoreException] with the reason if refused. */
     suspend fun installPlugin(manifest: String) = settingsFrom(obj("plugins.install", args("manifest" to manifest)))
     suspend fun removePlugin(id: String) = settingsFrom(obj("plugins.remove", args("id" to id)))
+    /** A QR code as rows of "0"/"1" (core/src/qr.rs, same encoder as the website). */
+    suspend fun qr(text: String): List<String> {
+        val a = obj("qr", args("text" to text)).optJSONArray("rows") ?: return emptyList()
+        return (0 until a.length()).map { a.optString(it) }
+    }
+
     suspend fun setHidden(channels: List<String>, words: List<String>) =
         settingsFrom(obj("settings.hidden", args("channels" to org.json.JSONArray(channels), "words" to org.json.JSONArray(words))))
     suspend fun toggleHiddenArtist(name: String, id: String?) = settingsFrom(obj("settings.hideArtist", args("name" to name, "id" to id)))
