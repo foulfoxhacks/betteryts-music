@@ -166,6 +166,7 @@ fun NowPlaying(vm: AppViewModel, player: PlayerController, top: Dp, bottom: Dp, 
                     PlayerTab.Lyrics -> lyricsItems(vm, player, track)
                     PlayerTab.Related -> related(vm, track)
                 }
+                item(key = "plugin-panels") { PluginPanels(vm) }
                 item {
                     Text(
                         if (vm.pluginOn("background")) "Background play is on: the music keeps going when you leave the app or turn off the screen."

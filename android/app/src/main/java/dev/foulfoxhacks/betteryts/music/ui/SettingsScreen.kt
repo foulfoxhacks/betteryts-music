@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -79,17 +80,27 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             item {
                 SectionHeader("Plugins")
                 Text(
-                    "Built for the BetterYTS ecosystem. Switch any of them off; changes apply right away.",
+                    "Built for the BetterYTS ecosystem, grouped by category. Switch a whole category or any plugin off; changes apply right away.",
                     Modifier.padding(horizontal = 16.dp),
                     color = Brand.Muted,
                     fontSize = 13.sp,
                 )
                 Spacer(Modifier.height(8.dp))
             }
-            vm.settings.plugins.groupBy { it.category }.forEach { (category, list) ->
-                item { Eyebrow(category, Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp)) }
-                items(list, key = { "plugin-" + it.id }) { p -> PluginRow(p) { vm.setPlugin(p.id, it) } }
+            vm.settings.categories.forEach { c ->
+                item(key = "category-" + c.id) { CategoryRow(c) { vm.setCategory(c.id, it) } }
+                items(vm.settings.plugins.filter { it.category == c.id }, key = { "plugin-" + it.id }) { p ->
+                    // A switched-off category dims its plugins but keeps each one's own switch.
+                    Box(Modifier.alpha(if (c.enabled) 1f else 0.45f)) {
+                        if (p.community) {
+                            CommunityRow(p, vm.settings.permissionText, vm.sandboxErrors[p.id], { vm.setPlugin(p.id, it) }, { vm.removePlugin(p.id) })
+                        } else {
+                            PluginRow(p) { vm.setPlugin(p.id, it) }
+                        }
+                    }
+                }
             }
+            item(key = "community-install") { CommunityInstallCard(vm) }
 
             item { SectionHeader("YouTube account") }
             item { GoogleCard(vm) }

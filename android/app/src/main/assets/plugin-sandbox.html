@@ -1,0 +1,99 @@
+<!doctype html>
+<!--
+  BetterYTS community-plugin sandbox. Shared by the website (in an <iframe sandbox="allow-scripts">,
+  so an opaque origin with no cookies or storage of the site) and BetterYTS Music (in a WebView with
+  network loads blocked). The plugin's code runs in a Worker made here: no DOM, no frames, no
+  WebRTC, and this page's CSP (connect-src 'none' via default-src) is inherited by the Worker, so
+  it has no network either. It can only exchange the messages below, and the host checks those again.
+
+  host → sandbox: { t: "start", code, permissions }   { t: "nowPlaying", data }
+  sandbox → host: { t: "ready" }   { t: "panel", text }   { t: "error", text }
+-->
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; worker-src blob:" />
+<title>BetterYTS plugin sandbox</title>
+<script>
+	(function () {
+		"use strict";
+		var app = typeof BTMPlugin === "object" && BTMPlugin && typeof BTMPlugin.post === "function";
+		function toHost(m) {
+			if (app) BTMPlugin.post(JSON.stringify(m));
+			else if (window.parent !== window) window.parent.postMessage(m, "*");
+		}
+
+		var worker = null;
+		var perms = [];
+		var lastPong = 0;
+		var panelText = null;
+		var panelTimer = null;
+
+		// The plugin API, defined inside the Worker before the plugin's code runs.
+		var PRELUDE =
+			"(function(){'use strict';var send=self.postMessage.bind(self),handlers={};" +
+			"self.betteryts=Object.freeze({" +
+			"on:function(type,fn){if(typeof fn==='function')(handlers[type]=handlers[type]||[]).push(fn);}," +
+			"panel:function(text){send({t:'panel',text:String(text==null?'':text).slice(0,500)});}});" +
+			"self.onmessage=function(e){var d=e.data||{};if(d.t==='__ping'){send({t:'__pong'});return;}" +
+			"(handlers[d.t]||[]).forEach(function(fn){try{fn(d.data);}catch(err){send({t:'error',text:String(err&&err.message||err).slice(0,200)});}});};" +
+			// Belt and braces: the CSP already blocks the network, so these are gone twice.
+			"['fetch','XMLHttpRequest','WebSocket','EventSource','importScripts','indexedDB','caches','BroadcastChannel','Worker','SharedWorker','WebTransport']" +
+			".forEach(function(k){try{Object.defineProperty(self,k,{value:undefined,configurable:false,writable:false});}catch(_){}});" +
+			"})();\n";
+
+		function flushPanel() {
+			panelTimer = null;
+			if (panelText !== null) toHost({ t: "panel", text: panelText });
+			panelText = null;
+		}
+
+		function stop(reason) {
+			if (worker) worker.terminate();
+			worker = null;
+			if (reason) toHost({ t: "error", text: reason });
+		}
+
+		function start(code, permissions) {
+			if (worker || typeof code !== "string") return;
+			perms = Array.isArray(permissions) ? permissions.filter(function (p) { return typeof p === "string"; }) : [];
+			try {
+				var url = URL.createObjectURL(new Blob([PRELUDE + code], { type: "text/javascript" }));
+				worker = new Worker(url);
+				URL.revokeObjectURL(url);
+			} catch (e) {
+				stop("Couldn't start: " + String(e && e.message || e).slice(0, 160));
+				return;
+			}
+			lastPong = Date.now();
+			worker.onmessage = function (e) {
+				var d = e.data;
+				if (!d || typeof d !== "object") return;
+				if (d.t === "__pong") lastPong = Date.now();
+				else if (d.t === "panel" && perms.indexOf("panel") >= 0) {
+					// At most four updates a second reach the host.
+					panelText = String(d.text == null ? "" : d.text).slice(0, 500);
+					if (!panelTimer) panelTimer = setTimeout(flushPanel, 250);
+				} else if (d.t === "error") toHost({ t: "error", text: String(d.text).slice(0, 200) });
+			};
+			worker.onerror = function (e) {
+				e.preventDefault();
+				toHost({ t: "error", text: String(e.message || "Script error").slice(0, 200) });
+			};
+			// A plugin stuck in a loop is stopped rather than left burning battery.
+			setInterval(function () {
+				if (!worker) return;
+				if (Date.now() - lastPong > 12000) stop("Stopped: the plugin stopped responding");
+				else worker.postMessage({ t: "__ping" });
+			}, 4000);
+		}
+
+		function receive(m) {
+			if (!m || typeof m !== "object") return;
+			if (m.t === "start") start(m.code, m.permissions);
+			else if (m.t === "nowPlaying" && worker && perms.indexOf("nowPlaying") >= 0) worker.postMessage({ t: "nowPlaying", data: m.data });
+		}
+
+		if (app) window.btmReceive = function (json) { try { receive(JSON.parse(json)); } catch (_) {} };
+		else window.addEventListener("message", function (e) { if (e.source === window.parent) receive(e.data); });
+		toHost({ t: "ready" });
+	})();
+</script>

@@ -85,6 +85,171 @@ pub const CATALOG: &[PluginInfo] = &[
 	},
 ];
 
+/// Plugin categories. Each has a whole-category switch; a plugin runs only if both it and its
+/// category are on. `permissions` is what a *community* plugin in that category may ask for;
+/// categories with `community: false` are for built-in plugins only, because what they do
+/// (control playback, open rooms, talk to the network) can't be sandboxed safely.
+#[derive(Serialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Category {
+	pub id: &'static str,
+	pub name: &'static str,
+	pub description: &'static str,
+	pub community: bool,
+	pub permissions: &'static [&'static str],
+}
+
+pub const CATEGORIES: &[Category] = &[
+	Category { id: "Playback", name: "Playback", description: "What plays and when. Built-in plugins only.", community: false, permissions: &[] },
+	Category {
+		id: "Player",
+		name: "Player",
+		description: "Extras shown with the song. Community plugins here can see what's playing and show a text panel.",
+		community: true,
+		permissions: &["nowPlaying", "panel"],
+	},
+	Category { id: "Look", name: "Look", description: "Colours and style. Community plugins here can change the accent colours.", community: true, permissions: &["palette"] },
+	Category { id: "BetterYTS", name: "BetterYTS", description: "Rooms, VRChat and the rest of the ecosystem. Built-in plugins only.", community: false, permissions: &[] },
+];
+
+/// What each permission lets a community plugin do, in words for the install prompt.
+pub const PERMISSIONS: &[(&str, &str)] = &[
+	("nowPlaying", "See the title, artist and position of the song that's playing"),
+	("panel", "Show a short text panel in the player"),
+	("palette", "Change the accent colours"),
+];
+
+/// Colours a Look plugin may set.
+pub const PALETTE_KEYS: &[&str] = &["accent", "hot"];
+pub const MAX_COMMUNITY: usize = 10;
+pub const MAX_CODE_BYTES: usize = 20_000;
+
+/// A community plugin, as installed from a manifest. Its code never runs in the app's own
+/// context: the app runs it in a sandbox (a Worker in a WebView with network loads blocked) and
+/// only sends it what its permissions allow.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityPlugin {
+	pub id: String,
+	pub name: String,
+	#[serde(default)]
+	pub version: String,
+	#[serde(default)]
+	pub author: String,
+	#[serde(default)]
+	pub description: String,
+	pub category: String,
+	pub permissions: Vec<String>,
+	#[serde(default)]
+	pub code: String,
+	#[serde(default)]
+	pub palette: BTreeMap<String, String>,
+}
+
+fn clean(v: &Value, key: &str, max: usize) -> Result<String, String> {
+	let raw = match v.get(key) {
+		None | Some(Value::Null) => "",
+		Some(Value::String(s)) => s.as_str(),
+		Some(_) => return Err(format!("`{key}` must be text")),
+	};
+	let t: String = raw.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
+	if t.chars().count() > max {
+		return Err(format!("`{key}` is longer than {max} characters"));
+	}
+	Ok(t)
+}
+
+fn is_hex_color(c: &str) -> bool {
+	c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+/// Checks a community plugin manifest (JSON text). The rules match the website's
+/// web/plugins.js, so a manifest that installs on one installs on the other.
+pub fn validate_manifest(text: &str) -> Result<CommunityPlugin, String> {
+	if text.len() > MAX_CODE_BYTES + 4_000 {
+		return Err("That manifest is too big".into());
+	}
+	let v: Value = serde_json::from_str(text).map_err(|_| "That isn't a plugin manifest (expected JSON)".to_string())?;
+	if !v.is_object() {
+		return Err("That isn't a plugin manifest (expected a JSON object)".into());
+	}
+	let id = clean(&v, "id", 32)?;
+	let id_ok = id.len() >= 3 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') && !id.starts_with('-');
+	if !id_ok {
+		return Err("`id` must be 3-32 characters: lowercase letters, digits and dashes".into());
+	}
+	if CATALOG.iter().any(|p| p.id == id) {
+		return Err(format!("`{id}` is a built-in plugin"));
+	}
+	let name = clean(&v, "name", 40)?;
+	if name.is_empty() {
+		return Err("`name` is required".into());
+	}
+	let category = clean(&v, "category", 20)?;
+	let cat = CATEGORIES.iter().find(|c| c.id == category).ok_or_else(|| format!("Unknown category `{category}`"))?;
+	if !cat.community {
+		let allowed: Vec<&str> = CATEGORIES.iter().filter(|c| c.community).map(|c| c.id).collect();
+		return Err(format!("Community plugins can't be in {} (allowed: {})", cat.name, allowed.join(", ")));
+	}
+	let mut permissions: Vec<String> = Vec::new();
+	for p in v.get("permissions").and_then(Value::as_array).ok_or("`permissions` must be a list")? {
+		let p = p.as_str().ok_or("`permissions` must be a list of names")?;
+		if !cat.permissions.contains(&p) {
+			return Err(format!("A {} plugin can't ask for `{p}` (allowed: {})", cat.name, cat.permissions.join(", ")));
+		}
+		if !permissions.iter().any(|x| x == p) {
+			permissions.push(p.to_string());
+		}
+	}
+	if permissions.is_empty() {
+		return Err("`permissions` is empty: the plugin couldn't do anything".into());
+	}
+	let code = match v.get("code") {
+		None | Some(Value::Null) => String::new(),
+		Some(Value::String(c)) => c.clone(),
+		Some(_) => return Err("`code` must be text".into()),
+	};
+	let runs = permissions.iter().any(|p| p == "nowPlaying" || p == "panel");
+	if runs && code.trim().is_empty() {
+		return Err("This plugin needs `code`".into());
+	}
+	if !runs && !code.is_empty() {
+		return Err("Only Player plugins can run code".into());
+	}
+	if code.len() > MAX_CODE_BYTES {
+		return Err(format!("`code` is over {} KB", MAX_CODE_BYTES / 1000));
+	}
+	let mut palette = BTreeMap::new();
+	if let Some(p) = v.get("palette").filter(|p| !p.is_null()) {
+		let obj = p.as_object().ok_or("`palette` must be an object")?;
+		for (k, c) in obj {
+			if !PALETTE_KEYS.contains(&k.as_str()) {
+				return Err(format!("`palette` can only set {}", PALETTE_KEYS.join(", ")));
+			}
+			let c = c.as_str().filter(|c| is_hex_color(c)).ok_or_else(|| format!("`palette.{k}` must be a colour like #ff8800"))?;
+			palette.insert(k.clone(), c.to_ascii_lowercase());
+		}
+	}
+	let wants_palette = permissions.iter().any(|p| p == "palette");
+	if wants_palette && palette.is_empty() {
+		return Err("A Look plugin needs a `palette`".into());
+	}
+	if !wants_palette && !palette.is_empty() {
+		return Err("`palette` needs the `palette` permission".into());
+	}
+	Ok(CommunityPlugin {
+		id,
+		name,
+		version: clean(&v, "version", 16)?,
+		author: clean(&v, "author", 40)?,
+		description: clean(&v, "description", 200)?,
+		category,
+		permissions,
+		code,
+		palette,
+	})
+}
+
 pub const THEMES: &[(&str, &str)] = &[("ember", "Ember · akasammythepuppy"), ("mello", "Mello · Mello Zone")];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -93,6 +258,9 @@ pub struct Settings {
 	pub theme: String,
 	/// Only plugins the user has switched; the rest follow the catalog's default.
 	pub plugins: BTreeMap<String, bool>,
+	/// Only categories the user has switched; the rest are on.
+	pub categories: BTreeMap<String, bool>,
+	pub community: Vec<CommunityPlugin>,
 }
 
 impl Settings {
@@ -100,17 +268,61 @@ impl Settings {
 		THEMES.iter().map(|(id, _)| *id).find(|id| *id == self.theme).unwrap_or("ember")
 	}
 
-	pub fn enabled(&self, id: &str) -> bool {
+	pub fn category_on(&self, id: &str) -> bool {
+		self.categories.get(id).copied().unwrap_or(true)
+	}
+
+	fn category_of(&self, id: &str) -> Option<&str> {
+		CATALOG.iter().find(|p| p.id == id).map(|p| p.category).or_else(|| self.community.iter().find(|p| p.id == id).map(|p| p.category.as_str()))
+	}
+
+	/// The plugin's own switch (ignoring its category).
+	pub fn switched_on(&self, id: &str) -> bool {
 		self.plugins.get(id).copied().unwrap_or_else(|| CATALOG.iter().any(|p| p.id == id && p.default_enabled))
+	}
+
+	/// True if the plugin should run: it and its category are both on.
+	pub fn enabled(&self, id: &str) -> bool {
+		match self.category_of(id) {
+			Some(cat) => self.category_on(cat) && self.switched_on(id),
+			None => false,
+		}
 	}
 
 	/// Returns false for an unknown plugin or theme.
 	pub fn set_plugin(&mut self, id: &str, on: bool) -> bool {
-		if !CATALOG.iter().any(|p| p.id == id) {
+		if self.category_of(id).is_none() {
 			return false;
 		}
 		self.plugins.insert(id.to_string(), on);
 		true
+	}
+
+	pub fn set_category(&mut self, id: &str, on: bool) -> bool {
+		if !CATEGORIES.iter().any(|c| c.id == id) {
+			return false;
+		}
+		self.categories.insert(id.to_string(), on);
+		true
+	}
+
+	/// Installs (or updates, by id) a community plugin from its manifest; it starts switched on.
+	pub fn install(&mut self, manifest: &str) -> Result<CommunityPlugin, String> {
+		let p = validate_manifest(manifest)?;
+		match self.community.iter().position(|x| x.id == p.id) {
+			Some(i) => self.community[i] = p.clone(),
+			None if self.community.len() >= MAX_COMMUNITY => return Err(format!("You can have up to {MAX_COMMUNITY} community plugins")),
+			None => self.community.push(p.clone()),
+		}
+		self.plugins.insert(p.id.clone(), true);
+		Ok(p)
+	}
+
+	pub fn remove(&mut self, id: &str) -> bool {
+		let before = self.community.len();
+		self.community.retain(|p| p.id != id);
+		self.plugins.remove(id);
+		self.community.len() != before
 	}
 
 	pub fn set_theme(&mut self, id: &str) -> bool {
@@ -127,9 +339,22 @@ impl Settings {
 			"themes": THEMES.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),
 			"plugins": CATALOG.iter().map(|p| {
 				let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
-				v["enabled"] = json!(self.enabled(p.id));
+				v["enabled"] = json!(self.switched_on(p.id));
+				v["active"] = json!(self.enabled(p.id));
+				v
+			}).chain(self.community.iter().map(|p| {
+				let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
+				v["community"] = json!(true);
+				v["enabled"] = json!(self.switched_on(&p.id));
+				v["active"] = json!(self.enabled(&p.id));
+				v
+			})).collect::<Vec<_>>(),
+			"categories": CATEGORIES.iter().map(|c| {
+				let mut v = serde_json::to_value(c).unwrap_or(Value::Null);
+				v["enabled"] = json!(self.category_on(c.id));
 				v
 			}).collect::<Vec<_>>(),
+			"permissions": PERMISSIONS.iter().map(|(id, text)| json!({ "id": id, "text": text })).collect::<Vec<_>>(),
 		})
 	}
 }
@@ -330,6 +555,74 @@ pub fn protv_playlist(name: &str, tracks: &[Track]) -> String {
 
 #[cfg(test)]
 mod tests {
+	const PANEL: &str = r#"{"id":"song-clock","name":"Song clock","category":"Player","permissions":["nowPlaying","panel"],"code":"betteryts.on('nowPlaying', n => betteryts.panel(n.title))"}"#;
+
+	#[test]
+	fn categories_gate_their_plugins() {
+		let mut s = Settings::default();
+		assert!(s.enabled("lyrics"));
+		assert!(s.set_category("Player", false));
+		assert!(!s.enabled("lyrics"), "a switched-off category turns its plugins off");
+		assert!(s.switched_on("lyrics"), "but remembers each plugin's own switch");
+		assert!(s.enabled("sponsorblock"), "other categories are untouched");
+		assert!(s.set_category("Player", true));
+		assert!(s.enabled("lyrics"));
+		assert!(!s.set_category("Nope", false));
+		let v = s.view();
+		assert_eq!(v["categories"].as_array().unwrap().len(), CATEGORIES.len());
+		assert!(CATALOG.iter().all(|p| CATEGORIES.iter().any(|c| c.id == p.category)), "every built-in has a real category");
+	}
+
+	#[test]
+	fn community_manifests_are_limited_to_safe_categories_and_permissions() {
+		let ok = validate_manifest(PANEL).unwrap();
+		assert_eq!(ok.permissions, vec!["nowPlaying", "panel"]);
+		let look = validate_manifest(r##"{"id":"sunset","name":"Sunset","category":"Look","permissions":["palette"],"palette":{"accent":"#FF8800","hot":"#aa0044"}}"##).unwrap();
+		assert_eq!(look.palette["accent"], "#ff8800");
+
+		let bad = |m: &str| validate_manifest(m).unwrap_err();
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Playback","permissions":["panel"],"code":"1"}"##).contains("can't be in Playback"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"BetterYTS","permissions":["panel"],"code":"1"}"##).contains("can't be in BetterYTS"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Player","permissions":["palette"],"code":"1"}"##).contains("can't ask for `palette`"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Look","permissions":["nowPlaying"]}"##).contains("can't ask for `nowPlaying`"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Look","permissions":["palette"],"palette":{"accent":"#fff"}}"##).contains("colour"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Look","permissions":["palette"],"palette":{"accent":"#ffffff"},"code":"evil()"}"##).contains("Only Player"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Look","permissions":["palette"],"palette":{"background":"#ffffff"}}"##).contains("can only set"));
+		assert!(bad(r##"{"id":"lyrics","name":"X","category":"Player","permissions":["panel"],"code":"1"}"##).contains("built-in"));
+		assert!(bad(r##"{"id":"Bad Id","name":"X","category":"Player","permissions":["panel"],"code":"1"}"##).contains("`id`"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Player","permissions":[]}"##).contains("empty"));
+		assert!(bad(r##"{"id":"x1x","name":"X","category":"Player","permissions":["panel"]}"##).contains("needs `code`"));
+		assert!(bad("not json").contains("JSON"));
+		let huge = format!(r#"{{"id":"x1x","name":"X","category":"Player","permissions":["panel"],"code":"{}"}}"#, "a".repeat(MAX_CODE_BYTES + 1));
+		assert!(bad(&huge).contains("KB"));
+	}
+
+	#[test]
+	fn community_plugins_install_switch_and_remove() {
+		let mut s = Settings::default();
+		s.install(PANEL).unwrap();
+		assert!(s.enabled("song-clock"));
+		s.set_category("Player", false);
+		assert!(!s.enabled("song-clock"), "community plugins follow their category too");
+		s.set_category("Player", true);
+		assert!(s.set_plugin("song-clock", false));
+		assert!(!s.enabled("song-clock"));
+		s.install(PANEL).unwrap();
+		assert_eq!(s.community.len(), 1, "reinstalling updates in place");
+		let v = s.view();
+		assert_eq!(v["plugins"].as_array().unwrap().iter().filter(|p| p["community"] == true).count(), 1);
+		for i in 0..MAX_COMMUNITY {
+			let _ = s.install(&PANEL.replace("song-clock", &format!("clock-{i}")));
+		}
+		assert_eq!(s.community.len(), MAX_COMMUNITY);
+		assert!(s.remove("song-clock"));
+		assert!(!s.enabled("song-clock"));
+		assert!(!s.remove("song-clock"));
+		// Settings saved before categories existed still load.
+		let old: Settings = serde_json::from_str(r#"{"theme":"mello","plugins":{"lyrics":false}}"#).unwrap();
+		assert!(!old.enabled("lyrics") && old.enabled("sponsorblock"));
+	}
+
 	use super::*;
 
 	#[test]

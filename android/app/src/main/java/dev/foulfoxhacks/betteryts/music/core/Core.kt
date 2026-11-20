@@ -130,22 +130,74 @@ object Core {
 
     // ---- settings and plugins (core/src/plugins.rs) ----
 
-    data class PluginInfo(val id: String, val name: String, val description: String, val category: String, val enabled: Boolean)
-    data class Settings(val theme: String = "ember", val themes: List<Pair<String, String>> = emptyList(), val plugins: List<PluginInfo> = emptyList()) {
-        fun on(id: String) = plugins.any { it.id == id && it.enabled }
+    /**
+     * [enabled] is the plugin's own switch; [active] means it runs (its category is on too).
+     * Community plugins also carry their manifest: permissions, sandboxed code, palette.
+     */
+    data class PluginInfo(
+        val id: String,
+        val name: String,
+        val description: String,
+        val category: String,
+        val enabled: Boolean,
+        val active: Boolean = enabled,
+        val community: Boolean = false,
+        val author: String = "",
+        val version: String = "",
+        val permissions: List<String> = emptyList(),
+        val code: String = "",
+        val palette: Map<String, String> = emptyMap(),
+    )
+
+    data class Category(val id: String, val name: String, val description: String, val community: Boolean, val enabled: Boolean)
+
+    data class Settings(
+        val theme: String = "ember",
+        val themes: List<Pair<String, String>> = emptyList(),
+        val plugins: List<PluginInfo> = emptyList(),
+        val categories: List<Category> = emptyList(),
+        val permissionText: Map<String, String> = emptyMap(),
+    ) {
+        fun on(id: String) = plugins.any { it.id == id && it.active }
+        val activeCommunity get() = plugins.filter { it.community && it.active }
     }
 
     private fun settingsFrom(o: JSONObject): Settings {
         val themes = o.optJSONArray("themes").mapObjects { (it.str("id") ?: return@mapObjects null) to (it.str("name") ?: "") }
         val plugins = o.optJSONArray("plugins").mapObjects {
-            PluginInfo(it.str("id") ?: return@mapObjects null, it.str("name") ?: "", it.str("description") ?: "", it.str("category") ?: "", it.optBoolean("enabled"))
+            val enabled = it.optBoolean("enabled")
+            val perms = it.optJSONArray("permissions")
+            val pal = it.optJSONObject("palette")
+            PluginInfo(
+                id = it.str("id") ?: return@mapObjects null,
+                name = it.str("name") ?: "",
+                description = it.str("description") ?: "",
+                category = it.str("category") ?: "",
+                enabled = enabled,
+                active = if (it.has("active")) it.optBoolean("active") else enabled,
+                community = it.optBoolean("community"),
+                author = it.str("author") ?: "",
+                version = it.str("version") ?: "",
+                permissions = perms?.let { a -> (0 until a.length()).map { i -> a.optString(i) } } ?: emptyList(),
+                code = it.str("code") ?: "",
+                palette = pal?.let { m -> m.keys().asSequence().associateWith { k -> m.optString(k) } } ?: emptyMap(),
+            )
         }
-        return Settings(o.str("theme") ?: "ember", themes, plugins)
+        val categories = o.optJSONArray("categories").mapObjects {
+            Category(it.str("id") ?: return@mapObjects null, it.str("name") ?: "", it.str("description") ?: "", it.optBoolean("community"), it.optBoolean("enabled", true))
+        }
+        val permissionText = o.optJSONArray("permissions").mapObjects { (it.str("id") ?: return@mapObjects null) to (it.str("text") ?: "") }.toMap()
+        return Settings(o.str("theme") ?: "ember", themes, plugins, categories, permissionText)
     }
 
     suspend fun settings() = settingsFrom(obj("settings.get"))
     suspend fun setTheme(id: String) = settingsFrom(obj("settings.theme", args("theme" to id)))
     suspend fun setPlugin(id: String, enabled: Boolean) = settingsFrom(obj("plugins.set", args("id" to id, "enabled" to enabled)))
+    suspend fun setCategory(id: String, enabled: Boolean) = settingsFrom(obj("plugins.category", args("id" to id, "enabled" to enabled)))
+
+    /** Installs a community plugin from its manifest (JSON text); throws [CoreException] with the reason if refused. */
+    suspend fun installPlugin(manifest: String) = settingsFrom(obj("plugins.install", args("manifest" to manifest)))
+    suspend fun removePlugin(id: String) = settingsFrom(obj("plugins.remove", args("id" to id)))
 
     data class Segment(val start: Float, val end: Float)
 

@@ -125,7 +125,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         try {
             Core.init(app.filesDir.absolutePath, Locale.getDefault().country)
             settings = Core.settings()
-            Brand.palette = Palettes.byId(settings.theme)
+            applyPlugins()
             library = Core.library()
             queue = Core.queueGet()
             restoreQueue()
@@ -782,15 +782,92 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun setTheme(id: String) {
-        Brand.palette = Palettes.byId(id) // instant; saved below
+        Brand.palette = withLook(Palettes.byId(id)) // instant; saved below
         io { settings = Core.setTheme(id) }
     }
 
     fun setPlugin(id: String, enabled: Boolean) = io {
         settings = Core.setPlugin(id, enabled)
+        applyPlugins()
         val t = queue.current
         if (enabled && t != null) onTrackChanged(t)
-        if (id == "sleep" && !enabled) cancelSleep()
+        if (!pluginOn("sleep")) cancelSleep()
+    }
+
+    /** The whole-category switch: every plugin in it stops (each keeps its own switch for later). */
+    fun setCategory(id: String, enabled: Boolean) = io {
+        settings = Core.setCategory(id, enabled)
+        applyPlugins()
+        val t = queue.current
+        if (enabled && t != null) onTrackChanged(t)
+        if (!pluginOn("sleep")) cancelSleep()
+    }
+
+    /** Set when a pasted manifest is refused, with the reason. */
+    var communityError by mutableStateOf<String?>(null)
+        private set
+
+    fun installPlugin(manifest: String, onInstalled: () -> Unit) = viewModelScope.launch {
+        ready.join()
+        communityError = null
+        try {
+            settings = Core.installPlugin(manifest.trim())
+            applyPlugins()
+            message = "Plugin installed"
+            onInstalled()
+        } catch (e: CoreException) {
+            communityError = e.message
+        }
+    }
+
+    fun removePlugin(id: String) = io {
+        settings = Core.removePlugin(id)
+        applyPlugins()
+    }
+
+    /** Community plugins run in sandboxes (plugins/PluginSandboxes.kt); created on first use. */
+    private var sandboxHost by mutableStateOf<dev.foulfoxhacks.betteryts.music.plugins.PluginSandboxes?>(null)
+    val sandboxes: dev.foulfoxhacks.betteryts.music.plugins.PluginSandboxes
+        get() = sandboxHost ?: dev.foulfoxhacks.betteryts.music.plugins.PluginSandboxes(getApplication()).also { sandboxHost = it }
+
+    /** Player panels from community plugins (empty until one runs). */
+    val pluginPanels: Map<String, String> get() = sandboxHost?.panels ?: emptyMap()
+    val sandboxErrors: Map<String, String> get() = sandboxHost?.errors ?: emptyMap()
+
+    override fun onCleared() {
+        sandboxHost?.destroy()
+        super.onCleared()
+    }
+    private var lastNowPlayingAt = 0L
+
+    /** Brings the theme (Look plugins) and the sandboxes (Player plugins) in line with settings. */
+    private fun applyPlugins() {
+        Brand.palette = withLook(Palettes.byId(settings.theme))
+        val active = settings.activeCommunity
+        if (active.any { it.code.isNotBlank() } || lastNowPlayingAt != 0L) {
+            sandboxes.sync(active)
+            sendNowPlaying(force = true)
+        }
+    }
+
+    /** Active Look plugins' colours over a theme; later plugins win. Colours were checked by the core. */
+    private fun withLook(base: dev.foulfoxhacks.betteryts.music.ui.theme.Palette): dev.foulfoxhacks.betteryts.music.ui.theme.Palette {
+        fun color(hex: String?) = hex?.let { runCatching { androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+        var p = base
+        for (plugin in settings.activeCommunity.filter { "palette" in it.permissions }) {
+            color(plugin.palette["accent"])?.let { p = p.copy(accent = it, lineAccent = it.copy(alpha = 0.26f)) }
+            color(plugin.palette["hot"])?.let { p = p.copy(hot = it) }
+        }
+        return p
+    }
+
+    private fun sendNowPlaying(force: Boolean) {
+        val t = nowPlaying ?: return
+        val p = player ?: return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastNowPlayingAt < 5_000) return
+        lastNowPlayingAt = now
+        sandboxes.nowPlaying(t.id, t.title, t.artist, p.position, p.duration, p.playing)
     }
 
     fun pluginOn(id: String) = settings.on(id)
@@ -804,6 +881,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun onTrackChanged(t: Track) {
         skippedUntil = 0f
+        if (settings.activeCommunity.isNotEmpty()) roomMain.post { sendNowPlaying(force = true) }
         dislikes = null
         // SponsorBlock and dislike counts are YouTube data; device files have neither.
         if (t.isLocal) return
@@ -825,6 +903,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         // Remember where playback stopped. Skip finished songs and the first moments of a cue,
         // which report 0 before YouTube knows the real position.
         if (room != null) roomDriftTick(id, seconds)
+        if (settings.activeCommunity.isNotEmpty()) sendNowPlaying(force = false)
         if (room == null && id == endedId && seconds < 3f) endedId = null
         if (room == null && resumeEnabled && id != endedId && seconds >= 0.5f && duration > 5f && seconds < duration - 3f) {
             val now = System.currentTimeMillis()

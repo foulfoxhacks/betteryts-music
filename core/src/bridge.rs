@@ -242,6 +242,34 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				Ok(s.settings.settings.view())
 			})
 		}
+		"plugins.category" => {
+			let (id, on): (String, bool) = (arg(a, "id")?, arg(a, "enabled")?);
+			with_state(|s| {
+				if !s.settings.settings.set_category(&id, on) {
+					return Err(format!("Unknown category `{id}`"));
+				}
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
+		"plugins.install" => {
+			let manifest: String = arg(a, "manifest")?;
+			with_state(|s| {
+				s.settings.settings.install(&manifest)?;
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
+		"plugins.remove" => {
+			let id: String = arg(a, "id")?;
+			with_state(|s| {
+				if !s.settings.settings.remove(&id) {
+					return Err(format!("No community plugin `{id}`"));
+				}
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
 		"rooms.new" => {
 			let v = api().get_json("/api/rooms/new", &[])?;
 			Ok(json!({ "code": v.get("code"), "hostKey": v.get("hostKey") }))
