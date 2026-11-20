@@ -18,6 +18,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
+import android.net.wifi.WifiManager
 import android.util.Log
 import dev.foulfoxhacks.betteryts.music.MainActivity
 import dev.foulfoxhacks.betteryts.music.R
@@ -40,6 +42,21 @@ class PlaybackService : Service() {
     private var artFor: String? = null
     private var art: Bitmap? = null
     private var foreground = false
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    /**
+     * Between songs the player reports "not playing" for a moment. Leaving the foreground then
+     * is fatal in the background: Android 12+ won't let the service come back, and with no lock
+     * held the CPU sleeps before the next song loads. So pauses only demote after a grace period.
+     */
+    private val demote = Runnable {
+        if (foreground) {
+            stopForeground(STOP_FOREGROUND_DETACH)
+            foreground = false
+        }
+        holdLocks(false)
+    }
 
     private val onChange: (PlaybackHub.Now?) -> Unit = { now -> main.post { render(now) } }
 
@@ -86,8 +103,10 @@ class PlaybackService : Service() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, placeholder, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
                 else startForeground(NOTIFICATION_ID, placeholder)
             }
+            main.removeCallbacks(demote)
             stopForeground(STOP_FOREGROUND_REMOVE)
             foreground = false
+            holdLocks(false)
             stopSelf()
             return
         }
@@ -112,16 +131,48 @@ class PlaybackService : Service() {
         )
         val n = notification(now)
         if (now.playing) {
+            main.removeCallbacks(demote)
+            goForeground(n)
+            holdLocks(true)
+        } else {
+            // Paused (or between songs): update the notification, stay in the foreground a little
+            // longer in case the next song is about to start, then let Android stop us if it likes.
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, n)
+            main.removeCallbacks(demote)
+            if (foreground) main.postDelayed(demote, PAUSE_GRACE_MS) else holdLocks(false)
+        }
+    }
+
+    private fun goForeground(n: Notification) {
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
             else startForeground(NOTIFICATION_ID, n)
             foreground = true
-        } else {
-            // Paused: the notification stays (and can be swiped away), but Android may stop us.
-            if (foreground) {
-                stopForeground(STOP_FOREGROUND_DETACH)
-                foreground = false
-            }
+        } catch (e: Exception) {
+            // ForegroundServiceStartNotAllowedException: resumed from the background after a long
+            // pause. The music still plays; the notification just isn't sticky until the app is opened.
+            Log.w("BTMPlayback", "couldn't enter the foreground", e)
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, n)
+        }
+    }
+
+    /** CPU and Wi-Fi stay awake while music plays, so the next song can load with the screen off. */
+    @Suppress("DEPRECATION") // WIFI_MODE_FULL_HIGH_PERF: still the lock that keeps Wi-Fi up for streaming.
+    private fun holdLocks(on: Boolean) {
+        if (on) {
+            val wl = wakeLock ?: getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BetterYTSMusic:playback")
+                .apply { setReferenceCounted(false) }
+                .also { wakeLock = it }
+            wl.acquire(LOCK_TIMEOUT_MS) // re-armed on every playing update; the timeout is a safety net
+            val wf = wifiLock ?: applicationContext.getSystemService(WifiManager::class.java)
+                ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "BetterYTSMusic:playback")
+                ?.apply { setReferenceCounted(false) }
+                ?.also { wifiLock = it }
+            if (wf != null && !wf.isHeld) wf.acquire()
+        } else {
+            wakeLock?.takeIf { it.isHeld }?.release()
+            wifiLock?.takeIf { it.isHeld }?.release()
         }
     }
 
@@ -185,6 +236,8 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         PlaybackHub.unlisten(onChange)
+        main.removeCallbacks(demote)
+        holdLocks(false)
         session.release()
         io.shutdownNow()
         super.onDestroy()
@@ -195,6 +248,8 @@ class PlaybackService : Service() {
     companion object {
         private const val CHANNEL = "playback"
         private const val NOTIFICATION_ID = 7
+        private const val PAUSE_GRACE_MS = 30_000L
+        private const val LOCK_TIMEOUT_MS = 3 * 60 * 60 * 1000L
         private const val ACTION_PLAY_PAUSE = "dev.foulfoxhacks.betteryts.music.PLAY_PAUSE"
         private const val ACTION_NEXT = "dev.foulfoxhacks.betteryts.music.NEXT"
         private const val ACTION_PREVIOUS = "dev.foulfoxhacks.betteryts.music.PREVIOUS"

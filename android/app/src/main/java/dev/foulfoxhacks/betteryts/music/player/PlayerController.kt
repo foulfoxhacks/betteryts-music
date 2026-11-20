@@ -157,6 +157,8 @@ class PlayerController(context: Context) {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
+        // Keep the renderer process important while hidden; by default Android may reclaim it.
+        setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
                 Log.i(TAG, "js: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
@@ -184,7 +186,31 @@ class PlayerController(context: Context) {
         loadDataWithBaseURL(PlayerHtml.ORIGIN + "/", PlayerHtml.PAGE, "text/html", "utf-8", null)
     }
 
+    /** The song whose end was last reported, so ENDED and the watchdog below fire once per playthrough. */
+    private var endedFor: String? = null
+
+    private fun reportEnded(id: String, why: String) {
+        if (endedFor == id) return
+        endedFor = id
+        Log.i(TAG, "ended ($why) $id")
+        listener?.onEnded(id)
+    }
+
+    /**
+     * Backup for a lost ENDED event (a throttled embed in the background can drop or delay it):
+     * if the embed sits at the very end and nothing changes, treat the song as finished.
+     */
+    private var watchdogArmed = false
+    private val endWatchdog = Runnable {
+        watchdogArmed = false
+        val id = currentId ?: return@Runnable
+        if (!local && duration > 1f && position >= duration - 0.5f) reportEnded(id, "watchdog")
+    }
+
     fun load(id: String, startSeconds: Float = 0f, autoplay: Boolean = true) {
+        main.removeCallbacks(endWatchdog)
+        watchdogArmed = false
+        endedFor = null
         currentId = id
         position = startSeconds
         duration = 0f
@@ -271,6 +297,7 @@ class PlayerController(context: Context) {
     fun destroy() {
         listener = null
         main.removeCallbacks(ticker)
+        main.removeCallbacks(endWatchdog)
         exoPlayer?.release()
         exoPlayer = null
         webView.destroy()
@@ -299,7 +326,7 @@ class PlayerController(context: Context) {
                 startedFor = id
                 listener?.onStartedPlaying(id)
             }
-            if (state == 0 && id != null) listener?.onEnded(id)
+            if (state == 0 && id != null) reportEnded(id, "embed")
         }
 
         @JavascriptInterface
@@ -314,6 +341,17 @@ class PlayerController(context: Context) {
             if (local) return@post
             if (!seeking) position = seconds.toFloat()
             if (total > 0) duration = total.toFloat()
+            val id = currentId
+            if (id != null && total > 1) {
+                if (seconds < total - 2) {
+                    endedFor = null // replaying from the start (repeat one) may end again
+                    main.removeCallbacks(endWatchdog)
+                    watchdogArmed = false
+                } else if (seconds >= total - 0.5 && endedFor != id && !watchdogArmed) {
+                    watchdogArmed = true
+                    main.postDelayed(endWatchdog, 2_000)
+                }
+            }
             currentId?.let { if (!seeking) listener?.onProgress(it, seconds.toFloat(), duration) }
         }
     }

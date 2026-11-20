@@ -22,6 +22,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import androidx.core.content.ContextCompat
 import dev.foulfoxhacks.betteryts.music.player.PlaybackHub
 import dev.foulfoxhacks.betteryts.music.player.PlaybackService
@@ -73,11 +77,11 @@ class MainActivity : ComponentActivity() {
             override fun previous() { vm.previous() }
             override fun seekTo(seconds: Float) { vm.seek(seconds) }
         }
+        syncMediaNotification()
         setContent {
             BetterYTSTheme {
                 // Keep the PiP play/pause button in step with the page.
                 LaunchedEffect(player.playing) { refreshPipParams() }
-                MediaNotificationSync()
                 App(vm, player)
             }
         }
@@ -129,22 +133,29 @@ class MainActivity : ComponentActivity() {
     /** Background play on: music just keeps going (like a music app). Off: shrink to PiP. */
     private val backgroundPlay get() = vm.pluginOn("background")
 
-    /** Keeps the media notification / lock screen in step with the player. */
-    @androidx.compose.runtime.Composable
-    private fun MediaNotificationSync() {
-        val now = vm.nowPlaying
-        val on = backgroundPlay
-        player.keepPlayingWhenHidden = on
-        // Start the service when music starts (the app is in the foreground then, as Android requires).
-        LaunchedEffect(on, now?.id, player.playing) {
-            if (on && now != null && player.playing) PlaybackService.start(this@MainActivity)
-        }
-        // Position is sent once a second; the session extrapolates in between.
-        val second = player.position.toInt()
-        LaunchedEffect(on, now, player.playing, second, player.duration, vm.canSkip) {
-            PlaybackHub.update(
-                if (on && now != null) PlaybackHub.Now(now.id, now.title, now.artist, now.largeArt, player.playing, player.position, player.duration, vm.canSkip) else null,
-            )
+    /**
+     * Keeps the media notification / lock screen in step with the player. This must not live in
+     * a Composable: Compose stops recomposing once the activity is stopped, which is exactly when
+     * background play needs the notification (and the foreground service) to follow song changes.
+     * snapshotFlow is driven by snapshot writes, not frames, so it keeps running while hidden.
+     */
+    private fun syncMediaNotification() {
+        lifecycleScope.launch {
+            snapshotFlow {
+                val on = backgroundPlay
+                player.keepPlayingWhenHidden = on
+                val now = vm.nowPlaying
+                // Position in whole seconds: the session extrapolates in between.
+                if (on && now != null) {
+                    PlaybackHub.Now(now.id, now.title, now.artist, now.largeArt, player.playing, player.position.toInt().toFloat(), player.duration, vm.canSkip)
+                } else {
+                    null
+                }
+            }.distinctUntilChanged().collect { next ->
+                // Start the service when music starts (the app is in the foreground then, as Android requires).
+                if (next != null && next.playing && PlaybackHub.now?.playing != true) PlaybackService.start(this@MainActivity)
+                PlaybackHub.update(next)
+            }
         }
     }
 
