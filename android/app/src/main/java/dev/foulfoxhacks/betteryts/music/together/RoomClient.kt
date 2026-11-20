@@ -67,8 +67,16 @@ class RoomClient(
     private var closed = false
     private var retry = 0
 
-    /** serverTime − localTime, from the last state message. */
+    /** serverTime − localTime. NTP-style from timestamped pongs; rough from state messages until then. */
     private var clockOffset = 0L
+    private var synced = false
+    private val samples = ArrayDeque<Pair<Long, Long>>() // (rtt, offset)
+    private val pinger = object : Runnable {
+        override fun run() {
+            ping()
+            main.postDelayed(this, 10_000)
+        }
+    }
     var isHost = false
         private set
 
@@ -82,6 +90,11 @@ class RoomClient(
                     retry = 0
                     events.onStatus("connected")
                     hello()
+                    samples.clear()
+                    // A quick burst so the clock is accurate before the first play, then every 10 s.
+                    main.removeCallbacks(pinger)
+                    for (i in 0 until 5) main.postDelayed({ ping() }, i * 120L)
+                    main.postDelayed(pinger, 10_000)
                 }
             }
 
@@ -107,7 +120,7 @@ class RoomClient(
     private fun handle(msg: JSONObject) {
         when (msg.optString("t")) {
             "state" -> {
-                if (msg.has("serverTime")) clockOffset = msg.optLong("serverTime") - System.currentTimeMillis()
+                if (!synced && msg.has("serverTime")) clockOffset = msg.optLong("serverTime") - System.currentTimeMillis()
                 msg.optJSONObject("state")?.let { events.onState(RoomState.from(it)) }
             }
             "members" -> {
@@ -119,11 +132,35 @@ class RoomClient(
                 events.onRole(isHost)
             }
             "denied" -> events.onDenied(msg.optString("reason"))
+            "pong" -> onPong(msg)
         }
     }
 
+    /** Pings carry our send time; the pong echoes it with the server's clock (protocol.ts). */
+    private fun ping() = send(JSONObject().put("t", "ping").put("c", System.currentTimeMillis()))
+
+    /** offset ≈ s − (c + rtt/2); the sample with the smallest round trip is the least distorted, so it wins. */
+    private fun onPong(msg: JSONObject) {
+        if (!msg.has("c") || !msg.has("s")) return
+        val c = msg.optLong("c")
+        val s = msg.optLong("s")
+        val rtt = System.currentTimeMillis() - c
+        if (rtt < 0 || rtt > 10_000) return
+        samples.addLast(rtt to s - (c + rtt / 2))
+        if (samples.size > 8) samples.removeFirst()
+        clockOffset = samples.minBy { it.first }.second
+        synced = true
+    }
+
+    /** The server's clock, now. */
+    fun serverNow(): Long = System.currentTimeMillis() + clockOffset
+
+    /** Ms until a scheduled change ([RoomState.at]) takes effect; ≤ 0 once it has. */
+    fun msUntil(s: RoomState): Long = s.at - serverNow()
+
     private fun reconnect(reason: String) {
         socket = null
+        main.removeCallbacks(pinger)
         if (closed) return
         if (reason == "Room is full") {
             events.onStatus("full")
@@ -151,10 +188,11 @@ class RoomClient(
 
     /** Where the room's playback is right now, in seconds, corrected for clock skew. */
     fun positionOf(s: RoomState): Float =
-        if (!s.playing) s.position else s.position + ((System.currentTimeMillis() + clockOffset - s.at).coerceAtLeast(0) / 1000f)
+        if (!s.playing) s.position else s.position + ((serverNow() - s.at).coerceAtLeast(0) / 1000f)
 
     fun close() {
         closed = true
+        main.removeCallbacks(pinger)
         socket?.close(1000, "leave")
         socket = null
         http.dispatcher.executorService.shutdown()

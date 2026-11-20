@@ -234,6 +234,17 @@ class PlayerController(context: Context) {
         js("speed($rate)")
     }
 
+    /**
+     * Watch-party drift correction: play briefly faster or slower to catch up without a seek.
+     * Leaves [speed] alone, so [endNudge] puts the user's choice back.
+     */
+    fun nudge(rate: Float) {
+        exoPlayer?.setPlaybackSpeed(rate)
+        if (!local) js("speed($rate)")
+    }
+
+    fun endNudge() = nudge(speed)
+
     /** Calls made before the player page exists are queued and run once it has loaded. */
     private var pageLoaded = false
     private val pendingJs = mutableListOf<String>()

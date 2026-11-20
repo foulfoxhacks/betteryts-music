@@ -824,6 +824,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     override fun onProgress(id: String, seconds: Float, duration: Float) {
         // Remember where playback stopped. Skip finished songs and the first moments of a cue,
         // which report 0 before YouTube knows the real position.
+        if (room != null) roomDriftTick(id, seconds)
         if (room == null && id == endedId && seconds < 3f) endedId = null
         if (room == null && resumeEnabled && id != endedId && seconds >= 0.5f && duration > 5f && seconds < duration - 3f) {
             val now = System.currentTimeMillis()
@@ -1238,6 +1239,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun leaveRoom() {
+        roomMain.removeCallbacks(roomStart)
+        endNudge()
         room?.close()
         room = null
         roomState = null
@@ -1255,23 +1258,76 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     fun roomInviteLink(code: String) = "${RoomClient.BASE}/?room=$code"
     fun roomVrchatLink(code: String) = "${RoomClient.BASE}/room/$code"
 
-    /** Makes the local player match the room. */
+    private val roomMain = android.os.Handler(android.os.Looper.getMainLooper())
+    private val roomStart = Runnable { player?.play() }
+    /** +1 while playing fast to catch up, −1 while playing slow, 0 at normal speed. */
+    private var nudgeDir = 0
+
+    private fun endNudge() {
+        if (nudgeDir != 0) player?.endNudge()
+        nudgeDir = 0
+    }
+
+    /**
+     * Makes the local player match the room. The server schedules starts a moment ahead
+     * (state.at in the future), so every member waits for the same instant before playing.
+     */
     private fun applyRoomState(s: RoomState) {
         val p = player ?: return
         val r = room ?: return
+        roomMain.removeCallbacks(roomStart)
+        endNudge()
         val v = s.video
         if (v == null) {
             p.pause()
             return
         }
-        val target = r.positionOf(s)
+        val wait = r.msUntil(s)
+        val scheduled = s.playing && wait > 30
         if (p.currentId != v.id) {
-            p.load(v.id, target, autoplay = s.playing)
+            if (scheduled) {
+                p.load(v.id, s.position, autoplay = false)
+                roomMain.postDelayed(roomStart, wait)
+            } else {
+                p.load(v.id, r.positionOf(s), autoplay = s.playing)
+            }
             onTrackChanged(Track(v.id, v.title, "Listening together"))
             return
         }
-        if (kotlin.math.abs(p.position - target) > 2f) p.seek(target)
+        if (scheduled && !p.playing) {
+            p.seek(s.position)
+            roomMain.postDelayed(roomStart, wait)
+            return
+        }
+        val target = r.positionOf(s)
+        if (kotlin.math.abs(p.position - target) > 1f) p.seek(target)
         if (s.playing && !p.playing) p.play() else if (!s.playing && p.playing) p.pause()
+    }
+
+    /** Small drift is fixed by playing at 1.25×/0.75× for a moment; only big jumps seek. */
+    private fun roomDriftTick(id: String, seconds: Float) {
+        val r = room ?: return
+        val s = roomState ?: return
+        val p = player ?: return
+        if (!s.playing || s.video?.id != id || !p.playing || r.msUntil(s) > 0) {
+            endNudge()
+            return
+        }
+        val target = r.positionOf(s)
+        val drift = target - seconds // > 0: we are behind
+        val off = kotlin.math.abs(drift)
+        if (off > 2f) {
+            endNudge()
+            p.seek(target)
+            return
+        }
+        val dir = if (drift > 0) 1 else -1
+        if (nudgeDir != 0) {
+            if (off < 0.08f || dir != nudgeDir) endNudge()
+        } else if (off > 0.25f) {
+            nudgeDir = dir
+            p.nudge(if (dir > 0) 1.25f else 0.75f)
+        }
     }
 
     // Last, so every property above is initialised first (Kotlin runs initialisers in order).
