@@ -295,6 +295,13 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				Ok(json!({ "summary": sum, "settings": s.settings.settings.view() }))
 			})
 		}
+		"spotify.clientId" => Ok(json!({ "clientId": crate::spotify_account::client_id(&api())? })),
+		"spotify.exchange" => {
+			let (client, redirect, code, verifier): (String, String, String, String) = (arg(a, "clientId")?, arg(a, "redirectUri")?, arg(a, "code")?, arg(a, "verifier")?);
+			Ok(json!({ "token": crate::spotify_account::exchange(&client, &redirect, &code, &verifier)? }))
+		}
+		"spotify.playlists" => to_value(crate::spotify_account::playlists(&arg::<String>(a, "token")?)?),
+		"spotify.tracks" => to_value(crate::spotify_account::tracks(&arg::<String>(a, "token")?, &arg::<String>(a, "id")?, &arg::<String>(a, "name")?)?),
 		"inworld.check" => to_value(crate::inworld::check(&api(), &arg::<String>(a, "code")?)?),
 		"inworld.send" => {
 			let (code, service): (String, String) = (arg(a, "code")?, arg(a, "service")?);

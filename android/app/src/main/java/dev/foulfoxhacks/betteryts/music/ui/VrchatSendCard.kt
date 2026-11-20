@@ -67,7 +67,7 @@ fun VrchatSendCard(vm: AppViewModel) {
 }
 
 @Composable
-private fun PickRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun PickRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked, onChange, colors = CheckboxDefaults.colors(checkedColor = Brand.Gold, checkmarkColor = Brand.GoldInk, uncheckedColor = Brand.Muted))
         Text(label, color = Brand.Paper, fontSize = 14.sp)

@@ -80,6 +80,7 @@ fun SpotifyCard(vm: AppViewModel) {
                     scope.launch { clipboard.getClipEntry()?.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.let { link = it.toString().trim() } }
                 })
             }
+            SpotifySignIn(vm)
             job.error?.let { Text(it, color = Brand.Ember, fontSize = 13.sp) }
             job.summary?.let { Text(it, color = Brand.Paper, fontSize = 14.sp) }
             job.note?.let { Text(it, color = Brand.Muted, fontSize = 12.sp) }
@@ -95,4 +96,22 @@ private fun Expandable(title: String, lines: List<String>) {
     var open by remember { mutableStateOf(false) }
     Text((if (open) "▾ " else "▸ ") + title, Modifier.clickable { open = !open }, color = Brand.Tan, fontSize = 13.sp)
     if (open) lines.forEach { Text("• $it", Modifier.padding(start = 12.dp), color = Brand.Muted, fontSize = 12.sp) }
+}
+
+/** Sign in with Spotify for private playlists and Liked Songs; the token is used once, never saved. */
+@Composable
+private fun SpotifySignIn(vm: AppViewModel) {
+    val acct = vm.spotifyAccount
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val picked = androidx.compose.runtime.remember(acct.lists) { androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(acct.lists.take(3).map { it.id }) } }
+    if (acct.lists.isEmpty()) {
+        BrandButton("Sign in with Spotify", { runCatching { context.startActivity(vm.spotifySignInIntent()) } })
+        Text("For private playlists and Liked Songs. Read-only; the sign-in is used for this import and not saved.", color = Brand.Muted, fontSize = 12.sp)
+    } else {
+        Text("Pick playlists to import. Each song is matched to its YouTube version.", color = Brand.Paper, fontSize = 13.sp)
+        acct.lists.forEach { l -> PickRow("${l.name} · ${l.count}", l.id in picked) { on -> if (on) picked.add(l.id) else picked.remove(l.id) } }
+        BrandButton("Import picked", { vm.importSpotifyPicked(picked.toList()) }, primary = true, enabled = picked.isNotEmpty())
+    }
+    acct.busy?.let { Text(it, color = Brand.Paper, fontSize = 13.sp) }
+    acct.error?.let { Text(it, color = Brand.Ember, fontSize = 13.sp) }
 }

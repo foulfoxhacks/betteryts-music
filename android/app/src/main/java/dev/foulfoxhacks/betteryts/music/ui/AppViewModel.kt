@@ -1240,13 +1240,83 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private var spotifyJob: Job? = null
 
     /** Reads the playlist, matches 4 songs at a time (with progress), saves it as a playlist. */
+    // ---- Sign in with Spotify: pick playlists (and Liked Songs); the token lives only in memory ----
+    data class SpotifyAccountState(val lists: List<Core.SpotifyRemoteList> = emptyList(), val busy: String? = null, val error: String? = null)
+
+    var spotifyAccount by mutableStateOf(SpotifyAccountState())
+        private set
+    private var spotifyToken: String? = null
+    private val oauthPrefs by lazy { getApplication<Application>().getSharedPreferences("spotify_oauth", android.content.Context.MODE_PRIVATE) }
+
+    /** Opens Spotify's consent page (through the BetterYTS Worker, which adds the client ID). */
+    fun spotifySignInIntent(): android.content.Intent {
+        fun rnd(n: Int) = android.util.Base64.encodeToString(ByteArray(n).also { java.security.SecureRandom().nextBytes(it) }, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+        val state = rnd(24)
+        val verifier = rnd(48)
+        oauthPrefs.edit().putString("state", state).putString("verifier", verifier).putLong("at", System.currentTimeMillis()).apply()
+        val challenge = android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray()), android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+        val uri = android.net.Uri.parse("${RoomClient.BASE}/auth/spotify/start").buildUpon().appendQueryParameter("state", state).appendQueryParameter("code_challenge", challenge).build()
+        return android.content.Intent(android.content.Intent.ACTION_VIEW, uri).addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+    }
+
+    /** betterytsmusic://oauth/spotify?code=…&state=… */
+    fun finishSpotifySignIn(uri: android.net.Uri) = viewModelScope.launch {
+        ready.join()
+        selectTab(Tab.Library)
+        val state = oauthPrefs.getString("state", null)
+        val verifier = oauthPrefs.getString("verifier", null)
+        val fresh = System.currentTimeMillis() - oauthPrefs.getLong("at", 0) < 15 * 60_000
+        oauthPrefs.edit().clear().apply()
+        spotifyAccount = SpotifyAccountState(busy = "Signing in to Spotify…")
+        spotifyAccount = try {
+            uri.getQueryParameter("error")?.let { throw CoreException(if (it == "access_denied") "Sign-in cancelled" else "Spotify sign-in failed ($it)") }
+            if (state == null || verifier == null || !fresh || uri.getQueryParameter("state") != state) throw CoreException("That sign-in link expired. Try again.")
+            val code = uri.getQueryParameter("code") ?: throw CoreException("Spotify sign-in failed")
+            val token = Core.spotifyExchange(Core.spotifyClientId(), "${RoomClient.BASE}/auth/spotify/callback", code, verifier)
+            spotifyToken = token
+            SpotifyAccountState(lists = Core.spotifyPlaylists(token))
+        } catch (e: CoreException) {
+            SpotifyAccountState(error = e.message)
+        }
+    }
+
+    /** Imports the picked Spotify playlists one after another (each becomes a library playlist). */
+    fun importSpotifyPicked(ids: List<String>) {
+        val token = spotifyToken ?: return
+        if (spotify.running) return
+        val picked = spotifyAccount.lists.filter { it.id in ids }
+        spotifyJob = viewModelScope.launch {
+            for (l in picked) {
+                val list = try {
+                    Core.spotifyTracks(token, l.id, l.name)
+                } catch (e: CoreException) {
+                    spotify = SpotifyImport(error = "Couldn't read “${l.name}”: ${e.message}")
+                    return@launch
+                }
+                importSpotifyList(list)
+            }
+        }
+    }
+
     fun importFromSpotify(link: String) {
         if (spotify.running || link.isBlank()) return
         spotifyJob = viewModelScope.launch {
+            val list = try {
+                ready.join()
+                Core.spotifyRead(link.trim())
+            } catch (e: CoreException) {
+                spotify = SpotifyImport(error = "Couldn't import: ${e.message}")
+                return@launch
+            }
+            importSpotifyList(list)
+        }
+    }
+
+    /** Matches a Spotify list to YouTube and saves it as a playlist. */
+    private suspend fun importSpotifyList(list: Core.SpotifyList) {
             ready.join()
             spotify = SpotifyImport(running = true)
             try {
-                val list = Core.spotifyRead(link.trim())
                 spotify = spotify.copy(total = list.tracks.size)
                 val permits = Semaphore(4)
                 val matches = coroutineScope {
@@ -1284,7 +1354,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             } catch (e: CoreException) {
                 spotify = SpotifyImport(error = "Couldn't import: ${e.message}")
             }
-        }
     }
 
     fun cancelSpotifyImport() {

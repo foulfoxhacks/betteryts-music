@@ -23,6 +23,7 @@ pub mod spotify;
 pub mod qr;
 pub mod backup;
 pub mod inworld;
+pub mod spotify_account;
 #[cfg(test)]
 mod qr_fixtures;
 

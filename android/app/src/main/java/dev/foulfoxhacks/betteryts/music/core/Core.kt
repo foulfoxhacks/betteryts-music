@@ -111,8 +111,25 @@ object Core {
     data class SpotifyMatch(val track: Track?, val confidence: String, val videoTitle: String?)
 
     /** A public Spotify playlist or album, read through the BetterYTS Worker. */
-    suspend fun spotifyRead(link: String): SpotifyList {
-        val o = obj("spotify.read", args("link" to link))
+    suspend fun spotifyRead(link: String): SpotifyList = spotifyListFrom(obj("spotify.read", args("link" to link)))
+
+    // ---- Sign in with Spotify (core/src/spotify_account.rs) ----
+
+    data class SpotifyRemoteList(val id: String, val name: String, val count: Int)
+
+    suspend fun spotifyClientId(): String = obj("spotify.clientId").optString("clientId")
+
+    suspend fun spotifyExchange(clientId: String, redirectUri: String, code: String, verifier: String): String =
+        obj("spotify.exchange", args("clientId" to clientId, "redirectUri" to redirectUri, "code" to code, "verifier" to verifier)).optString("token")
+
+    suspend fun spotifyPlaylists(token: String): List<SpotifyRemoteList> {
+        val a = request("spotify.playlists", args("token" to token)) as? org.json.JSONArray
+        return a.mapObjects { SpotifyRemoteList(it.str("id") ?: return@mapObjects null, it.str("name") ?: "Playlist", it.optInt("count")) }
+    }
+
+    suspend fun spotifyTracks(token: String, id: String, name: String): SpotifyList = spotifyListFrom(obj("spotify.tracks", args("token" to token, "id" to id, "name" to name)))
+
+    private fun spotifyListFrom(o: JSONObject): SpotifyList {
         val a = o.optJSONArray("tracks") ?: org.json.JSONArray()
         val tracks = (0 until a.length()).mapNotNull { i ->
             val t = a.optJSONObject(i) ?: return@mapNotNull null

@@ -104,6 +104,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         val data = intent?.data
+        if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "betterytsmusic" && data.host == "oauth" && data.path == "/spotify") {
+            vm.finishSpotifySignIn(data)
+            return
+        }
         if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "betterytsmusic" && data.host == "oauth") {
             vm.finishGoogleSignIn(data)
             return
