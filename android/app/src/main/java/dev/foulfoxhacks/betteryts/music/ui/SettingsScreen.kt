@@ -22,6 +22,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -108,7 +109,10 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             item { SectionHeader("About") }
             item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("BetterYTS Music by FoulFoxHacks · 0.4.0", color = Brand.Paper, fontWeight = FontWeight.Bold)
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?" }
+                    Text("BetterYTS Music by FoulFoxHacks · v$version", color = Brand.Paper, fontWeight = FontWeight.Bold)
+                    Text("Part of the BetterYTS ecosystem: every project and version at yts.foulfoxhacks.dev/ecosystem", color = Brand.Muted, fontSize = 13.sp)
                     Text("Search and pages come from the BetterYTS API (yts.foulfoxhacks.dev). Songs play through YouTube's official player.", color = Brand.Muted, fontSize = 13.sp)
                     Text("Skip data: SponsorBlock (CC BY-NC-SA 4.0). Dislike counts: Return YouTube Dislike. Lyrics: LRCLIB.", color = Brand.Muted, fontSize = 13.sp)
                 }
