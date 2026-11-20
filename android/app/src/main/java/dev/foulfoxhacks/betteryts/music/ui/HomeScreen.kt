@@ -29,6 +29,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -166,11 +168,12 @@ fun HomeScreen(vm: AppViewModel, pad: PaddingValues) {
             }
         }
 
-        vm.shelves.forEach { shelf ->
+        // A shelf that came back empty is left out rather than shown as a bare heading.
+        vm.shelves.filter { (it.tracks as? Load.Ready)?.value?.isEmpty() != true }.forEach { shelf ->
             shelfHeader("Mixed for you", shelf.title, action = "Play") { (shelf.tracks as? Load.Ready)?.value?.let { vm.playTracks(it, 0) } }
             item {
                 when (val s = shelf.tracks) {
-                    Load.Loading -> Loading()
+                    Load.Loading -> SkeletonCarousel()
                     is Load.Failed -> ErrorBox(s.message) { vm.retryShelves() }
                     is Load.Ready -> TrackCarousel(s.value) { i -> vm.playTracks(s.value, i) }
                 }
@@ -345,5 +348,21 @@ private fun DialTile(t: Track, modifier: Modifier, onClick: () -> Unit) {
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/** Placeholder cards the size of a TrackCarousel, gently pulsing while a shelf loads. */
+@Composable
+private fun SkeletonCarousel() {
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "skeleton")
+    val a by pulse.animateFloat(0.35f, 0.7f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(800), androidx.compose.animation.core.RepeatMode.Reverse), label = "alpha")
+    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        repeat(3) {
+            Column(Modifier.width(144.dp)) {
+                Box(Modifier.size(144.dp).background(Brand.Raised.copy(alpha = a)))
+                Box(Modifier.padding(top = 10.dp).width(110.dp).height(12.dp).background(Brand.Raised.copy(alpha = a)))
+                Box(Modifier.padding(top = 6.dp).width(70.dp).height(10.dp).background(Brand.Raised.copy(alpha = a * 0.8f)))
+            }
+        }
     }
 }

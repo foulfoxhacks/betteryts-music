@@ -870,7 +870,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         sandboxes.nowPlaying(t.id, t.title, t.artist, p.position, p.duration, p.playing)
     }
 
-    fun pluginOn(id: String) = settings.on(id)
+    /** In-app updates (sideload build): checks every few hours, downloads, verifies, installs. */
+    val updater = dev.foulfoxhacks.betteryts.music.update.Updater(app).also { dev.foulfoxhacks.betteryts.music.update.Updater.current = it }
+
+    fun checkForUpdate() = viewModelScope.launch { updater.check() }
+
+    fun installUpdate() = viewModelScope.launch { updater.install() }
+
+    /** Play Store builds leave out background play (it goes beyond YouTube's embed terms). */
+    fun pluginOn(id: String) = settings.on(id) && !(id == "background" && dev.foulfoxhacks.betteryts.music.BuildConfig.PLAY_STORE)
 
     /** Library › Send to a VRChat world. */
     data class WorldSend(val prefill: String = "", val checkedCode: String? = null, val service: String = "youtube", val busy: Boolean = false, val error: String? = null, val sent: String? = null)
@@ -1562,5 +1570,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     // Last, so every property above is initialised first (Kotlin runs initialisers in order).
     init {
         loadShelves()
+        viewModelScope.launch {
+            ready.join()
+            updater.check(auto = true)
+        }
     }
 }

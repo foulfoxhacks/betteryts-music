@@ -83,6 +83,7 @@ fun App(vm: AppViewModel, player: PlayerController) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     Screens(vm, PaddingValues(top = top, bottom = 24.dp))
                 }
+                UpdateBanner(vm)
                 if (current != null) MiniPlayer(vm, player, current, MINI_HEIGHT, MINI_VIDEO_WIDTH)
                 // In a room with nothing playing there's no player to hold the room card.
                 else if (vm.room != null) RoomIdleBar(vm)

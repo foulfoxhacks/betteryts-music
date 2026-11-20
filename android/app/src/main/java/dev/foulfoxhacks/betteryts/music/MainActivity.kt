@@ -22,6 +22,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -78,11 +80,15 @@ class MainActivity : ComponentActivity() {
             override fun seekTo(seconds: Float) { vm.seek(seconds) }
         }
         syncMediaNotification()
+        // The fox intro plays on a cold start only (not after rotation or when returning to the app).
+        val coldStart = savedInstanceState == null
         setContent {
+            var intro by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(coldStart) }
             BetterYTSTheme {
                 // Keep the PiP play/pause button in step with the page.
                 LaunchedEffect(player.playing) { refreshPipParams() }
                 App(vm, player)
+                if (intro) dev.foulfoxhacks.betteryts.music.ui.FoxSplash { intro = false }
             }
         }
         ContextCompat.registerReceiver(

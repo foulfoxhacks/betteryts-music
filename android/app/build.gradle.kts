@@ -1,4 +1,4 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+﻿import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
 plugins {
@@ -15,8 +15,8 @@ android {
         applicationId = "dev.foulfoxhacks.betteryts.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.9.1"
+        versionCode = 11
+        versionName = "0.9.2"
         // Built by ../scripts/build-core.ps1 into src/main/jniLibs.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
@@ -27,7 +27,7 @@ android {
         if (file.exists()) file.inputStream().use { load(it) }
     }
     if (keystoreProperties.isEmpty()) {
-        logger.warn("betteryts: android/keystore.properties not found — the release APK will be UNSIGNED")
+        logger.warn("betteryts: android/keystore.properties not found â€” the release APK will be UNSIGNED")
     }
     signingConfigs {
         if (keystoreProperties.isNotEmpty()) {
@@ -41,7 +41,15 @@ android {
     }
 
     buildTypes {
+        // Where the in-app updater looks. Debug builds use a local test server (10.0.2.2 is the
+        // host from the emulator) so the update path can be tested without publishing anything.
+        debug {
+            buildConfigField("String", "UPDATE_MANIFEST", "\"http://10.0.2.2:5175/update.json\"")
+            buildConfigField("String", "UPDATE_HOST", "\"10.0.2.2\"")
+        }
         release {
+            buildConfigField("String", "UPDATE_MANIFEST", "\"https://yts.foulfoxhacks.dev/app/update.json\"")
+            buildConfigField("String", "UPDATE_HOST", "\"yts.foulfoxhacks.dev\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -54,7 +62,28 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    // Two builds of the same app (same package and key):
+    //   sideload: from yts.foulfoxhacks.dev, updates itself (Updater), background play available.
+    //   play:     for Google Play, which handles updates and doesn't allow self-updating apps or
+    //             background playback of YouTube embeds; both are left out.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("sideload") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+            buildConfigField("boolean", "PLAY_STORE", "false")
+        }
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+            buildConfigField("boolean", "PLAY_STORE", "true")
+        }
+    }
 }
 
 kotlin {

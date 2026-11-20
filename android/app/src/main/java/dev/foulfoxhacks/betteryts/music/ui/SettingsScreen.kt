@@ -92,7 +92,7 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             }
             vm.settings.categories.forEach { c ->
                 item(key = "category-" + c.id) { CategoryRow(c) { vm.setCategory(c.id, it) } }
-                items(vm.settings.plugins.filter { it.category == c.id }, key = { "plugin-" + it.id }) { p ->
+                items(vm.settings.plugins.filter { it.category == c.id && !(it.id == "background" && dev.foulfoxhacks.betteryts.music.BuildConfig.PLAY_STORE) }, key = { "plugin-" + it.id }) { p ->
                     // A switched-off category dims its plugins but keeps each one's own switch.
                     Box(Modifier.alpha(if (c.enabled) 1f else 0.45f)) {
                         if (p.community) {
@@ -121,6 +121,7 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
                     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?" }
                     Text("BetterYTS Music by FoulFoxHacks · v$version", color = Brand.Paper, fontWeight = FontWeight.Bold)
                     Text("Part of the BetterYTS ecosystem: every project and version at yts.foulfoxhacks.dev/ecosystem", color = Brand.Muted, fontSize = 13.sp)
+                    UpdateSettings(vm)
                     Text("Search and pages come from the BetterYTS API (yts.foulfoxhacks.dev). Songs play through YouTube's official player.", color = Brand.Muted, fontSize = 13.sp)
                     Text("Skip data: SponsorBlock (CC BY-NC-SA 4.0). Dislike counts: Return YouTube Dislike. Lyrics: LRCLIB.", color = Brand.Muted, fontSize = 13.sp)
                 }
