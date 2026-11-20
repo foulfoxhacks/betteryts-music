@@ -22,6 +22,7 @@ pub mod radio;
 pub mod spotify;
 pub mod qr;
 pub mod backup;
+pub mod inworld;
 #[cfg(test)]
 mod qr_fixtures;
 

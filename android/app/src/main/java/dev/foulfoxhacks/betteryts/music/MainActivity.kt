@@ -110,6 +110,11 @@ class MainActivity : ComponentActivity() {
         }
         // Watch-party invites: yts.foulfoxhacks.dev/?room=CODE or /room/CODE
         if (intent?.action == Intent.ACTION_VIEW && data?.host == "yts.foulfoxhacks.dev") {
+            // VRChat linking: /inworld/{service}/auth?code=… (or /link) opens Send to a VRChat world.
+            if (data.pathSegments.firstOrNull() == "inworld" || data.pathSegments.firstOrNull() == "link") {
+                vm.openWorldSend(data.getQueryParameter("code"))
+                return
+            }
             val code = data.getQueryParameter("room") ?: data.pathSegments.takeIf { it.size == 2 && it[0] == "room" }?.get(1)
             if (code != null) {
                 vm.joinRoom(code)

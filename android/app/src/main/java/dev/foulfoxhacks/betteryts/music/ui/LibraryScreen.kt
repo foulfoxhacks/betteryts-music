@@ -165,6 +165,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
         }
         item { Spacer(Modifier.height(8.dp)); SpotifyCard(vm) }
         item { GoogleCard(vm) }
+        if (vm.pluginOn("vrchat")) item { VrchatSendCard(vm) }
     }
 }
 

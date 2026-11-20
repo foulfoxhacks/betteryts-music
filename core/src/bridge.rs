@@ -295,6 +295,24 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				Ok(json!({ "summary": sum, "settings": s.settings.settings.view() }))
 			})
 		}
+		"inworld.check" => to_value(crate::inworld::check(&api(), &arg::<String>(a, "code")?)?),
+		"inworld.send" => {
+			let (code, service): (String, String) = (arg(a, "code")?, arg(a, "service")?);
+			let ids: Vec<String> = arg(a, "playlistIds")?;
+			let include_liked: bool = arg::<Option<bool>>(a, "liked")?.unwrap_or(false);
+			let lists = with_state(|s| {
+				let mut out: Vec<(String, Vec<Track>)> = Vec::new();
+				if include_liked && !s.store.lib.favorites.is_empty() {
+					out.push(("Liked songs".to_string(), s.store.lib.favorites.clone()));
+				}
+				for p in s.store.lib.playlists.iter().filter(|p| ids.contains(&p.id)) {
+					out.push((p.name.clone(), p.tracks.clone()));
+				}
+				Ok(out)
+			})?;
+			let (playlists, tracks) = crate::inworld::send(&api(), &code, &service, "", &lists)?;
+			Ok(json!({ "playlists": playlists, "tracks": tracks }))
+		}
 		"qr" => {
 			let q = crate::qr::encode(&arg::<String>(a, "text")?)?;
 			Ok(json!({ "size": q.size, "rows": q.rows() }))

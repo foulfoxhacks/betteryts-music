@@ -213,6 +213,18 @@ object Core {
         return (o.optJSONObject("summary") ?: JSONObject()) to settingsFrom(o.optJSONObject("settings") ?: JSONObject())
     }
 
+    /** Checks an activation code shown in a VRChat world: (canonical code, "youtube" | "spotify"). */
+    suspend fun inworldCheck(code: String): Pair<String, String> {
+        val o = obj("inworld.check", args("code" to code))
+        return (o.str("code") ?: code) to (o.str("service") ?: "youtube")
+    }
+
+    /** Sends library playlists (by ID, plus liked songs) to that world: (playlists, songs) sent. */
+    suspend fun inworldSend(code: String, service: String, playlistIds: List<String>, liked: Boolean): Pair<Int, Int> {
+        val o = obj("inworld.send", args("code" to code, "service" to service, "playlistIds" to org.json.JSONArray(playlistIds), "liked" to liked))
+        return o.optInt("playlists") to o.optInt("tracks")
+    }
+
     /** A QR code as rows of "0"/"1" (core/src/qr.rs, same encoder as the website). */
     suspend fun qr(text: String): List<String> {
         val a = obj("qr", args("text" to text)).optJSONArray("rows") ?: return emptyList()

@@ -213,6 +213,20 @@ impl Api {
 		self.get(path, query)
 	}
 
+	/// POSTs JSON (never cached). Error bodies are `{ error: "…" }` or `{ error: { message } }`.
+	pub fn post_json(&self, path: &str, body: &Value) -> Result<Value, String> {
+		let url = self.url(path, &[]);
+		match self.agent.post(&url).set("Content-Type", "application/json").send_string(&body.to_string()) {
+			Ok(res) => res.into_string().ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or_else(|| "BetterYTS sent something unexpected. Try again in a moment.".to_string()),
+			Err(ureq::Error::Status(code, res)) => {
+				let v: Option<Value> = res.into_string().ok().and_then(|t| serde_json::from_str(&t).ok());
+				let msg = v.as_ref().and_then(|v| v.get("error")).and_then(|e| e.as_str().map(String::from).or_else(|| e.get("message").and_then(Value::as_str).map(String::from)));
+				Err(msg.unwrap_or_else(|| format!("BetterYTS answered HTTP {code}")))
+			}
+			Err(ureq::Error::Transport(t)) => Err(format!("Can't reach BetterYTS ({})", t.kind())),
+		}
+	}
+
 	fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
 		let url = self.url(path, query);
 		if let Some(hit) = self.cache.lock().unwrap_or_else(|p| p.into_inner()).get(&url, Instant::now()) {

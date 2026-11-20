@@ -872,6 +872,47 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun pluginOn(id: String) = settings.on(id)
 
+    /** Library › Send to a VRChat world. */
+    data class WorldSend(val prefill: String = "", val checkedCode: String? = null, val service: String = "youtube", val busy: Boolean = false, val error: String? = null, val sent: String? = null)
+
+    var worldSend by mutableStateOf(WorldSend())
+        private set
+
+    /** From a yts.foulfoxhacks.dev/inworld/…/auth?code=… link: open the Library with the code ready. */
+    fun openWorldSend(code: String?) {
+        worldSend = WorldSend(prefill = code.orEmpty())
+        playerExpanded = false
+        selectTab(Tab.Library)
+        if (!code.isNullOrBlank()) checkWorldCode(code)
+    }
+
+    fun resetWorldSend() {
+        worldSend = WorldSend()
+    }
+
+    fun checkWorldCode(code: String) = viewModelScope.launch {
+        ready.join()
+        worldSend = worldSend.copy(busy = true, error = null, prefill = code)
+        worldSend = try {
+            val (c, service) = Core.inworldCheck(code)
+            worldSend.copy(busy = false, checkedCode = c, service = service, prefill = c)
+        } catch (e: CoreException) {
+            worldSend.copy(busy = false, checkedCode = null, error = e.message)
+        }
+    }
+
+    fun sendToWorld(playlistIds: List<String>, liked: Boolean) = viewModelScope.launch {
+        ready.join()
+        val code = worldSend.checkedCode ?: return@launch
+        worldSend = worldSend.copy(busy = true, error = null)
+        worldSend = try {
+            val (lists, songs) = Core.inworldSend(code, worldSend.service, playlistIds, liked)
+            worldSend.copy(busy = false, sent = "Sent $lists playlist${if (lists == 1) "" else "s"} ($songs songs). Look at the world: they show up within a few seconds.")
+        } catch (e: CoreException) {
+            worldSend.copy(busy = false, error = e.message)
+        }
+    }
+
     /** Settings › Backup: write the backup to a file the user picked (Storage Access Framework). */
     fun exportBackup(uri: android.net.Uri) = io {
         val app = getApplication<Application>()
