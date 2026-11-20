@@ -19,5 +19,6 @@ pub mod music;
 pub mod plugins;
 pub mod queue;
 pub mod radio;
+pub mod spotify;
 
 mod jni_entry;

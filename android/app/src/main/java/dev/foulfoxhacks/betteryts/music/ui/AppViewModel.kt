@@ -30,9 +30,15 @@ import dev.foulfoxhacks.betteryts.music.together.RoomClient
 import dev.foulfoxhacks.betteryts.music.together.RoomState
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
 import dev.foulfoxhacks.betteryts.music.ui.theme.Palettes
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 import java.util.Locale
 
@@ -1052,6 +1058,76 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             googleConnected = google.isConnected
             googleBusy = null
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Import from Spotify
+    // ---------------------------------------------------------------------------------------
+
+    data class SpotifyImport(
+        val running: Boolean = false,
+        val done: Int = 0,
+        val total: Int = 0,
+        val summary: String? = null,
+        val note: String? = null,
+        val unsure: List<String> = emptyList(),
+        val missing: List<String> = emptyList(),
+        val error: String? = null,
+    )
+
+    var spotify by mutableStateOf(SpotifyImport())
+    private var spotifyJob: Job? = null
+
+    /** Reads the playlist, matches 4 songs at a time (with progress), saves it as a playlist. */
+    fun importFromSpotify(link: String) {
+        if (spotify.running || link.isBlank()) return
+        spotifyJob = viewModelScope.launch {
+            ready.join()
+            spotify = SpotifyImport(running = true)
+            try {
+                val list = Core.spotifyRead(link.trim())
+                spotify = spotify.copy(total = list.tracks.size)
+                val permits = Semaphore(4)
+                val matches = coroutineScope {
+                    list.tracks.map { t ->
+                        async {
+                            permits.withPermit {
+                                val m = try {
+                                    Core.spotifyMatch(t)
+                                } catch (_: CoreException) {
+                                    null
+                                }
+                                spotify = spotify.copy(done = spotify.done + 1) // resumes on Main: no races
+                                t to m
+                            }
+                        }
+                    }.awaitAll()
+                }
+                val tracks = matches.mapNotNull { (_, m) -> m?.track }
+                val unsure = matches.filter { (_, m) -> m?.track != null && m.confidence == "low" }.map { (t, m) -> "${t.label} → ${m?.videoTitle ?: "?"}" }
+                val missing = matches.filter { (_, m) -> m?.track == null }.map { (t, _) -> t.label }
+                if (tracks.isEmpty()) throw CoreException("None of the songs could be found on YouTube")
+                val (lib, created) = Core.createPlaylist(list.name, tracks)
+                library = lib
+                if (created == null || created == JSONObject.NULL) throw CoreException("You've reached the playlist limit. Delete one and try again.")
+                spotify = SpotifyImport(
+                    summary = "Saved “${list.name}”: ${tracks.size} of ${list.tracks.size} songs found.",
+                    note = if (list.mayBeTruncated) "Spotify only shows the first 100 songs of long playlists, so later songs weren't imported." else null,
+                    unsure = unsure,
+                    missing = missing,
+                )
+                message = "Imported “${list.name}” from Spotify"
+            } catch (e: CancellationException) {
+                spotify = SpotifyImport(error = "Import cancelled.")
+                throw e
+            } catch (e: CoreException) {
+                spotify = SpotifyImport(error = "Couldn't import: ${e.message}")
+            }
+        }
+    }
+
+    fun cancelSpotifyImport() {
+        spotifyJob?.cancel()
     }
 
     fun disconnectGoogle() = io {

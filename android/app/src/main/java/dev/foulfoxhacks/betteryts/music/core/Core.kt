@@ -95,6 +95,39 @@ object Core {
     suspend fun removeFromPlaylist(id: String, index: Int) = libraryOp("removeFromPlaylist", args("id" to id, "index" to index)).first
     suspend fun toggleFollow(artist: Artist) = libraryOp("follow", args("artist" to artist.toJson()))
 
+    // ---- Spotify import (core/src/spotify.rs) ----
+
+    data class SpotifyTrack(val title: String, val artists: List<String>, val durationMs: Long?) {
+        val label get() = "${artists.joinToString(", ").ifBlank { "Unknown" }} – $title"
+        fun toJson() = JSONObject().apply {
+            put("title", title)
+            put("artists", org.json.JSONArray(artists))
+            if (durationMs != null) put("durationMs", durationMs)
+        }
+    }
+
+    data class SpotifyList(val name: String, val owner: String?, val tracks: List<SpotifyTrack>, val mayBeTruncated: Boolean)
+
+    data class SpotifyMatch(val track: Track?, val confidence: String, val videoTitle: String?)
+
+    /** A public Spotify playlist or album, read through the BetterYTS Worker. */
+    suspend fun spotifyRead(link: String): SpotifyList {
+        val o = obj("spotify.read", args("link" to link))
+        val a = o.optJSONArray("tracks") ?: org.json.JSONArray()
+        val tracks = (0 until a.length()).mapNotNull { i ->
+            val t = a.optJSONObject(i) ?: return@mapNotNull null
+            val artists = t.optJSONArray("artists")?.let { arr -> (0 until arr.length()).mapNotNull { arr.optString(it).takeIf(String::isNotBlank) } } ?: emptyList()
+            t.str("title")?.let { SpotifyTrack(it, artists, t.optLong("durationMs").takeIf { ms -> ms > 0 }) }
+        }
+        return SpotifyList(o.str("name") ?: "Spotify playlist", o.str("owner"), tracks, o.optBoolean("mayBeTruncated"))
+    }
+
+    /** The YouTube video for one Spotify song (named as Spotify names it), or no track. */
+    suspend fun spotifyMatch(track: SpotifyTrack): SpotifyMatch {
+        val o = obj("spotify.match", args("track" to track.toJson()))
+        return SpotifyMatch(o.optJSONObject("track")?.let(Track::from), o.str("confidence") ?: "none", o.str("videoTitle"))
+    }
+
     // ---- settings and plugins (core/src/plugins.rs) ----
 
     data class PluginInfo(val id: String, val name: String, val description: String, val category: String, val enabled: Boolean)

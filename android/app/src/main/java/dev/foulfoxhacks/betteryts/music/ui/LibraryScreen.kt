@@ -163,7 +163,8 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                 items(artists, key = { "a-" + it.id }) { a -> ArtistRow(a) { vm.openArtist(a.id, a.name) } }
             }
         }
-        item { Spacer(Modifier.height(8.dp)); GoogleCard(vm) }
+        item { Spacer(Modifier.height(8.dp)); SpotifyCard(vm) }
+        item { GoogleCard(vm) }
     }
 }
 

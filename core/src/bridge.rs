@@ -94,6 +94,8 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			Ok(json!({ "tracks": to_value(tracks)?, "failed": failed }))
 		}
 		"resolveLink" => to_value(links::resolve(&arg::<String>(a, "text")?)),
+		"spotify.read" => to_value(crate::spotify::read(&api(), &arg::<String>(a, "link")?)?),
+		"spotify.match" => to_value(crate::spotify::match_song(&api(), &arg::<crate::spotify::SpotifyTrack>(a, "track")?)?),
 
 		// ---- queue ----
 		"queue.get" => queue_op(|_| {}),
