@@ -1076,14 +1076,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun loadShelves() {
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        // Mood searches on YouTube are dominated by hour-long mixes and live radio streams, which
+        // the shelf filter rejects (they came back empty), so ask for short videos to begin with.
         val picks = listOf(
             when (hour) {
-                in 5..11 -> "Morning energy" to "upbeat morning music"
-                in 12..17 -> "Afternoon focus" to "focus music instrumental"
-                in 18..22 -> "Evening chill" to "chill evening music"
-                else -> "Late night" to "late night lofi"
+                in 5..11 -> "Morning energy" to "upbeat morning music duration:short"
+                in 12..17 -> "Afternoon focus" to "focus music instrumental duration:short"
+                in 18..22 -> "Evening chill" to "chill evening music duration:short"
+                else -> "Late night" to "late night lofi duration:short"
             },
-            "Lo-fi beats" to "lofi hip hop",
+            "Lo-fi beats" to "lofi hip hop song -mix -radio duration:short",
             "Today's hits" to "top hits this week official music video",
         )
         fillShelves(picks, get = { shelves }, set = { shelves = it })
@@ -1106,6 +1108,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
                     // Chart searches are full of compilations; one more page usually fills the shelf.
                     if (songs.size < size && first.next != null) {
                         songs = songs + Core.search(q, "songs", first.next).items.filterIsInstance<Item.TrackItem>().map { it.track }.filter(::isSingleSong)
+                    }
+                    // Still nothing (YouTube's results drift): one retry for single songs, without mixes.
+                    if (songs.isEmpty()) {
+                        val base = q.replace(Regex("""\s+(-\S+|\w+:\S+)"""), "").trim()
+                        songs = Core.search("$base song -mix -radio -live duration:short", "songs").items.filterIsInstance<Item.TrackItem>().map { it.track }.filter(::isSingleSong)
                     }
                     Load.Ready(songs.distinctBy { it.id }.take(size))
                 } catch (e: CoreException) {
