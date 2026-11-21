@@ -30,13 +30,27 @@ scripts/    build-core.ps1 cross-compiles core/ into android/app/src/main/jniLib
   Settings → Playback switch turns it off). Closing the app keeps the queue: the next launch
   brings back the same songs, cued paused at the right spot.
 
+### Two builds
+
+| | `sideload` (from yts.foulfoxhacks.dev) | `play` (Google Play) |
+|---|---|---|
+| Updates | Updates itself (below) | Through the Play Store |
+| Background play | Plugin, on by default (lock screen, headset, car controls) | Left out |
+| `REQUEST_INSTALL_PACKAGES` | Yes (updater only) | No |
+
+**In-app updater** (`update/Updater.kt`, sideload only): every few hours it reads
+`https://yts.foulfoxhacks.dev/app/update.json`, downloads a newer APK and only offers it if the
+SHA-256 and size match the manifest, it's this package with a higher `versionCode`, and it's
+signed with the installed app's certificate. It installs through `PackageInstaller`: Android asks
+the first time; once the app is its own installer, Android 12+ updates without a prompt. Debug
+builds read a local test server instead (`http://10.0.2.2:5175/update.json`).
+
 ### Playback rules (YouTube's embedded-player terms)
 
 - The player stays visible. Pressing Home (or Recents) while a song plays shrinks it into a
   **picture-in-picture** window that keeps playing over other apps, with play/pause and next
-  buttons. Closing that window or turning the screen off pauses playback. There is still no
-  audio-only, background or lock-screen playback; that would need stream extraction, which
-  YouTube's terms don't allow.
+  buttons. In the `play` build, closing that window or turning the screen off pauses playback;
+  background play is only in the `sideload` build.
 - The full player meets YouTube's 200×200 minimum player size. **The mini player's video and the
   system-sized PiP window are smaller than that on some screens** (the mini player is about
   114×64 dp); if the app goes to the Play Store, make the mini player bigger, or pause when the
@@ -53,15 +67,13 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 cargo install cargo-ndk
 ./scripts/build-core.ps1             # Rust core → android/app/src/main/jniLibs
 cd android
-./gradlew assembleDebug              # → app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleSideloadDebug      # → app/build/outputs/apk/sideload/debug/app-sideload-debug.apk
 ```
 
-For a signed production APK:
-
-```powershell
-cd android
-./gradlew assembleRelease            # → app/build/outputs/apk/release/app-release.apk
-```
+For a release, run `./scripts/publish-update.ps1`. It builds the core, the signed sideload APK and
+the Play bundle (`bundlePlayRelease`), writes the updater manifest into the site
+(`../betteryts/public/app/update.json`, with `$env:BTM_NOTES` as release notes), and copies the
+APK and AAB to `../releases/`. Then deploy the site. Upload the `.aab` to Google Play yourself.
 
 Release signing is read from `android/keystore.properties`, next to `release-keystore.jks`
 (both gitignored):
@@ -85,6 +97,16 @@ Tests for the core: `cd core; cargo test` (plus `cargo test -- --ignored` for li
 Library → **Connect with Google** imports YouTube / YouTube Music playlists, liked songs and
 subscriptions (read-only). Sign-in runs in the browser through the BetterYTS Worker, so it
 doesn't need Google Play services. Setup and the Google Cloud steps: [docs/google-setup.md](docs/google-setup.md).
+
+## Also in the app
+
+- **Spotify**: import public playlists by link, or Sign in with Spotify for private playlists and
+  Liked Songs (PKCE; the token is used for one import and not saved).
+- **Backup**: Settings › Backup exports/imports the same file as the website, so libraries move both ways.
+- **Send to a VRChat world**: Library card; just this visit by default, or saved for 30 days.
+- **Hidden artists and words**, plugin categories and sandboxed community plugins, Listen
+  Together rooms with QR invites.
+- An animated fox intro on cold start (skipped when system animations are off).
 
 ## Links into the app
 
