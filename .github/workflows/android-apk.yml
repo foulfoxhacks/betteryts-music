@@ -95,14 +95,14 @@ jobs:
           {
             echo "## BetterYTS Android build"
             echo ""
-            echo "- Commit: `$GITHUB_SHA`"
+            echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Rust core tests and Android APK build are required for a successful run."
             echo "- Expected APKs: sideload debug and Play Store debug."
             if [ -f apk-sha256.txt ]; then
               echo ""
               echo "### SHA-256"
-              echo ' ```text'
+              echo '```text'
               cat apk-sha256.txt
-              echo ' ```'
+              echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
