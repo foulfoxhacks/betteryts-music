@@ -1,25 +1,25 @@
 package dev.foulfoxhacks.betteryts.music.ui.theme
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 
 /**
- * A colour set. Both palettes share the same shapes and type (square panels, heavy uppercase
- * display, tracked labels): the akasammythepuppy.me / Mello Zone family look.
+ * A colour set. Both palettes share the same clean, flat look as the Mello Zone app: rounded
+ * Material shapes, sentence-case headlines, tracked uppercase eyebrows, pill buttons, no frames.
  */
 data class Palette(
     val id: String,
@@ -47,6 +47,9 @@ data class Palette(
     val card: List<Color>,
     /** Soft glow behind headers and the player. */
     val glow: Color,
+    /** Filled container for the selected tab pill and other emphasised surfaces. */
+    val container: Color,
+    val onContainer: Color,
 )
 
 object Palettes {
@@ -63,6 +66,7 @@ object Palettes {
         button = listOf(Color(0x428B451D), Color(0x3DB87333), Color(0x24FF681E)),
         card = listOf(Color(0xF71E1008), Color(0xFC080402)),
         glow = Color(0x59FF681E),
+        container = Color(0xFF5A3413), onContainer = Color(0xFFFFF7E7),
     )
 
     /** Mello Zone: violet, pink and sky blue on deep navy. */
@@ -78,6 +82,7 @@ object Palettes {
         button = listOf(Color(0x4D7637FF), Color(0x38135CFF), Color(0x24EF8FCB)),
         card = listOf(Color(0xF7141432), Color(0xFC08081A)),
         glow = Color(0x597637FF),
+        container = Color(0xFF135CFF), onContainer = Color.White,
     )
 
     val all = listOf(Ember, Mello)
@@ -107,27 +112,42 @@ object Brand {
     val Pink get() = palette.love
     val Line get() = palette.line
     val LineGold get() = palette.lineAccent
-    val Glow get() = palette.glow
+    /** Flat look: the old header glow is kept as a token but drawn transparent. */
+    val Glow get() = Color.Transparent
+    val Container get() = palette.container
+    val OnContainer get() = palette.onContainer
 
-    val TitleGradient get() = Brush.linearGradient(palette.title)
-    val HeadingGradient get() = Brush.linearGradient(palette.heading)
-    val ButtonGradient get() = Brush.linearGradient(palette.button)
-    val CardGradient get() = Brush.linearGradient(palette.card)
+    // Flat surfaces and solid type, like Mello Zone. The gradient lists stay in each palette
+    // (theme swatches use them) but these brushes are now solid.
+    val TitleGradient: Brush get() = SolidColor(palette.paper)
+    val HeadingGradient: Brush get() = SolidColor(palette.raised)
+    val ButtonGradient: Brush get() = SolidColor(palette.raised)
+    val CardGradient: Brush get() = SolidColor(palette.surface)
 }
 
-/** Big uppercase display type, like the headings on akasammythepuppy.me and Mello Zone. */
+/** Headline type, Mello Zone style: heavy, tight, sentence case, one solid colour. */
 fun displayStyle(size: Int, brush: Brush = Brand.TitleGradient) = TextStyle(
     brush = brush,
     fontSize = size.sp,
-    lineHeight = (size * 0.95).sp,
+    lineHeight = (size * 1.12).sp,
     fontWeight = FontWeight.Black,
-    letterSpacing = (-0.06).em,
+    letterSpacing = (-0.5).sp,
 )
 
-val EyebrowStyle get() = TextStyle(color = Brand.Tan, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.12.em)
-val LabelStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.08.em)
+/** Uppercase, tracked section label in the eyebrow colour ("COMMUNITY PLATFORMS"). */
+val EyebrowStyle get() = TextStyle(color = Brand.Tan, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+val LabelStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+/** Button and menu text: sentence case, no tracking. */
+val ButtonTextStyle = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium)
 
-private val Square = RoundedCornerShape(0.dp)
+/** Rounded corners everywhere; cards and images use `medium`/`large`. */
+val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(14.dp),
+    large = RoundedCornerShape(20.dp),
+    extraLarge = RoundedCornerShape(28.dp),
+)
 
 @Composable
 fun BetterYTSTheme(content: @Composable () -> Unit) {
@@ -136,6 +156,10 @@ fun BetterYTSTheme(content: @Composable () -> Unit) {
         colorScheme = darkColorScheme(
             primary = p.accent,
             onPrimary = p.onAccent,
+            primaryContainer = p.container,
+            onPrimaryContainer = p.onContainer,
+            secondaryContainer = p.raised,
+            onSecondaryContainer = p.eyebrow,
             secondary = p.violet,
             onSecondary = Color.White,
             tertiary = p.hot,
@@ -145,22 +169,30 @@ fun BetterYTSTheme(content: @Composable () -> Unit) {
             onSurface = p.paper,
             surfaceVariant = p.raised,
             onSurfaceVariant = p.muted,
+            surfaceContainerLowest = p.ink,
+            surfaceContainerLow = p.surface,
             surfaceContainer = p.surface,
             surfaceContainerHigh = p.raised,
             surfaceContainerHighest = p.selected,
-            outline = p.line,
+            outline = p.muted.copy(alpha = 0.45f),
             outlineVariant = p.line,
             error = Color(0xFFFF6B6B),
         ),
-        typography = Typography(
-            titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Black),
-            titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Bold),
-            bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
-            bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
-            bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
-            labelLarge = LabelStyle,
-        ),
-        shapes = Shapes(extraSmall = Square, small = Square, medium = Square, large = Square, extraLarge = Square),
+        typography = Typography().run {
+            copy(
+                displaySmall = displaySmall.copy(fontWeight = FontWeight.Black, fontSize = 34.sp, lineHeight = 38.sp, letterSpacing = (-0.5).sp),
+                headlineMedium = headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = 26.sp, lineHeight = 31.sp, letterSpacing = (-0.3).sp),
+                headlineSmall = headlineSmall.copy(fontWeight = FontWeight.ExtraBold, fontSize = 23.sp, lineHeight = 28.sp, letterSpacing = (-0.2).sp),
+                titleLarge = titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 20.sp, lineHeight = 26.sp),
+                titleMedium = titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = 17.sp, lineHeight = 23.sp),
+                bodyLarge = bodyLarge.copy(fontSize = 16.sp, lineHeight = 24.sp, letterSpacing = 0.1.sp),
+                bodyMedium = bodyMedium.copy(fontSize = 14.sp, lineHeight = 21.sp),
+                bodySmall = bodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                labelLarge = labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                labelMedium = labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp),
+            )
+        },
+        shapes = AppShapes,
         content = content,
     )
 }

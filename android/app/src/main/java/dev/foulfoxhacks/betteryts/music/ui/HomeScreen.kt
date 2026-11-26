@@ -1,5 +1,6 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,7 +31,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,7 +86,7 @@ fun BrandTopBar(vm: AppViewModel, top: Dp) {
         )
         Column(Modifier.weight(1f).padding(start = 10.dp)) {
             Text("BetterYTS Music", color = Brand.Paper, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1)
-            Text("BY FOULFOXHACKS", color = Brand.Tan, fontWeight = FontWeight.ExtraBold, fontSize = 9.sp, letterSpacing = 1.5.sp)
+            Text("by FoulFoxHacks", color = Brand.Muted, fontSize = 12.sp)
         }
         IconButton(onClick = { vm.selectTab(Tab.Search) }) { Icon(AppIcons.Search, "Search", tint = Brand.Paper) }
         Box(Modifier.padding(horizontal = 8.dp)) { Avatar(vm, 34) { vm.accountOpen = true } }
@@ -271,7 +271,7 @@ private fun MixCard(name: String, seed: Track, index: Int, onClick: () -> Unit) 
             RemoteImage(seed.art, Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(wash.copy(alpha = 0.15f), wash.copy(alpha = 0.85f)))))
             Text(
-                name.removeSuffix(" Mix").uppercase(),
+                name.removeSuffix(" Mix"),
                 Modifier.align(Alignment.BottomStart).padding(10.dp),
                 color = Brand.Ink,
                 fontWeight = FontWeight.Black,

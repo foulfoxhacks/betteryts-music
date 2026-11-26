@@ -1,7 +1,11 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,11 +22,9 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboard
@@ -33,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.foulfoxhacks.betteryts.music.core.Core
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
-import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -52,7 +53,7 @@ fun CategoryRow(c: Core.Category, onToggle: (Boolean) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(c.name.uppercase(), style = LabelStyle, color = if (c.enabled) Brand.Gold else Brand.Muted, fontSize = 13.sp)
+            Text(c.name, style = MaterialTheme.typography.titleMedium, color = if (c.enabled) Brand.Paper else Brand.Muted)
             Text(c.description, color = Brand.Muted, fontSize = 12.sp)
         }
         Spacer(Modifier.width(8.dp))
@@ -90,7 +91,7 @@ fun CommunityInstallCard(vm: AppViewModel) {
     val scope = rememberCoroutineScope()
 
     Column(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).background(Brand.CardGradient).border(1.dp, Brand.LineGold).padding(16.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).card().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Eyebrow("Add a community plugin")
@@ -154,7 +155,7 @@ fun PluginPanels(vm: AppViewModel) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         panels.forEach { (id, text) ->
             if (text.isBlank() || !vm.pluginOn(id)) return@forEach
-            Column(Modifier.fillMaxWidth().border(1.dp, Brand.Line).padding(12.dp)) {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Brand.Raised).padding(12.dp)) {
                 Text("${names[id] ?: id} · community plugin", color = Brand.Tan, fontSize = 11.sp)
                 Text(text, color = Brand.Paper, fontSize = 14.sp)
             }

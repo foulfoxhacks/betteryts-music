@@ -1,5 +1,6 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -10,13 +11,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -28,16 +28,20 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,9 +51,8 @@ import androidx.compose.ui.unit.min
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
-import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
 
-private val NAV_HEIGHT = 64.dp
+private val NAV_HEIGHT = 80.dp
 private val MINI_HEIGHT = 66.dp
 private val MINI_VIDEO_WIDTH = (MINI_HEIGHT - 2.dp) * 16f / 9f
 private val PLAYER_TOP_BAR = 56.dp
@@ -127,7 +130,7 @@ fun App(vm: AppViewModel, player: PlayerController) {
             SnackbarHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = bottom + NAV_HEIGHT + (if (current != null && !expanded) MINI_HEIGHT else 0.dp) + 8.dp),
-            ) { data -> Snackbar(data, containerColor = Brand.Raised, contentColor = Brand.Paper) }
+            ) { data -> Snackbar(data, shape = RoundedCornerShape(14.dp), containerColor = Brand.Raised, contentColor = Brand.Paper) }
 
             vm.playlistPickerFor?.let { AddToPlaylistDialog(vm, it) }
             if (vm.accountOpen) AccountSheet(vm)
@@ -163,11 +166,11 @@ private fun Screens(vm: AppViewModel, pad: PaddingValues) {
     }
 }
 
+/** Material bottom navigation with a pill indicator, as in the Mello Zone app. */
 @Composable
 private fun BottomBar(vm: AppViewModel, bottomInset: Dp) {
     Column(Modifier.fillMaxWidth().background(Brand.Surface)) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Brand.LineGold))
-        Row(Modifier.fillMaxWidth().height(NAV_HEIGHT - 1.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        NavigationBar(Modifier.height(NAV_HEIGHT), containerColor = Brand.Surface, windowInsets = WindowInsets(0, 0, 0, 0)) {
             NavItem(vm, Tab.Home, "Home", AppIcons.Home)
             NavItem(vm, Tab.Explore, "Explore", AppIcons.Explore)
             NavItem(vm, Tab.Library, "Library", AppIcons.Library)
@@ -177,15 +180,18 @@ private fun BottomBar(vm: AppViewModel, bottomInset: Dp) {
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.NavItem(vm: AppViewModel, tab: Tab, label: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    val selected = vm.tab == tab && !vm.playerExpanded
-    Column(
-        Modifier.weight(1f).fillMaxHeight().clickable { vm.selectTab(tab) },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(Modifier.width(28.dp).height(2.dp).background(if (selected) Brand.Gold else Brand.Surface))
-        Icon(icon, null, Modifier.padding(top = 6.dp).size(24.dp), tint = if (selected) Brand.Gold else Brand.Muted)
-        Text(label.uppercase(), style = LabelStyle, fontSize = 10.sp, color = if (selected) Brand.Gold else Brand.Muted)
-    }
+private fun RowScope.NavItem(vm: AppViewModel, tab: Tab, label: String, icon: ImageVector) {
+    NavigationBarItem(
+        selected = vm.tab == tab && !vm.playerExpanded,
+        onClick = { vm.selectTab(tab) },
+        icon = { Icon(icon, contentDescription = null) },
+        label = { Text(label, maxLines = 1, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp) },
+        colors = NavigationBarItemDefaults.colors(
+            selectedIconColor = Brand.OnContainer,
+            indicatorColor = Brand.Container,
+            selectedTextColor = Brand.Paper,
+            unselectedIconColor = Brand.Muted,
+            unselectedTextColor = Brand.Muted,
+        ),
+    )
 }

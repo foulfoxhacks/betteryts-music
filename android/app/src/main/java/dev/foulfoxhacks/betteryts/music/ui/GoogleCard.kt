@@ -1,8 +1,10 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.MaterialTheme
+import dev.foulfoxhacks.betteryts.music.ui.theme.ButtonTextStyle
 import android.content.ActivityNotFoundException
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,17 +19,14 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
-import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
 
 /** Library card: connect a YouTube account and import playlists, liked songs and subscriptions. */
 @Composable
@@ -40,8 +39,7 @@ fun GoogleCard(vm: AppViewModel) {
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .background(Brand.CardGradient)
-            .border(1.dp, Brand.LineGold)
+            .card()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -83,10 +81,10 @@ fun GoogleCard(vm: AppViewModel) {
         AlertDialog(
             onDismissRequest = { confirmDisconnect = false },
             containerColor = Brand.Surface,
-            title = { Text("DISCONNECT YOUTUBE?", style = LabelStyle, color = Brand.Tan) },
+            title = { Text("Disconnect YouTube?", style = MaterialTheme.typography.titleLarge, color = Brand.Paper) },
             text = { Text("BetterYTS Music's access to your Google account is revoked. Music you've already imported stays in the app.", color = Brand.Paper) },
-            confirmButton = { TextButton(onClick = { confirmDisconnect = false; vm.disconnectGoogle() }) { Text("DISCONNECT", style = LabelStyle, color = Brand.Ember) } },
-            dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("CANCEL", style = LabelStyle, color = Brand.Muted) } },
+            confirmButton = { TextButton(onClick = { confirmDisconnect = false; vm.disconnectGoogle() }) { Text("Disconnect", style = ButtonTextStyle, color = Brand.Ember) } },
+            dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel", style = ButtonTextStyle, color = Brand.Muted) } },
         )
     }
 }
@@ -99,7 +97,7 @@ private fun ImportDialog(onDismiss: () -> Unit, onImport: (Boolean, Boolean, Boo
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Brand.Surface,
-        title = { Text("IMPORT FROM YOUTUBE", style = LabelStyle, color = Brand.Tan) },
+        title = { Text("Import from YouTube", style = MaterialTheme.typography.titleLarge, color = Brand.Paper) },
         text = {
             Column {
                 Option("Playlists", "Re-importing updates them in place", playlists) { playlists = it }
@@ -108,9 +106,9 @@ private fun ImportDialog(onDismiss: () -> Unit, onImport: (Boolean, Boolean, Boo
             }
         },
         confirmButton = {
-            TextButton(onClick = { onImport(playlists, liked, subs) }, enabled = playlists || liked || subs) { Text("IMPORT", style = LabelStyle, color = Brand.Gold) }
+            TextButton(onClick = { onImport(playlists, liked, subs) }, enabled = playlists || liked || subs) { Text("Import", style = ButtonTextStyle, color = Brand.Gold) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", style = LabelStyle, color = Brand.Muted) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", style = ButtonTextStyle, color = Brand.Muted) } },
     )
 }
 
