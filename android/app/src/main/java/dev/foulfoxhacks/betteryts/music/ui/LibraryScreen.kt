@@ -1,5 +1,9 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -27,10 +31,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -99,7 +101,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                     )
                     if (tab != "history") {
                         Text(
-                            if (az) "A–Z" else "RECENT",
+                            if (az) "A–Z" else "Recent",
                             Modifier.clickable { az = !az }.padding(horizontal = 12.dp, vertical = 14.dp),
                             color = Brand.Gold,
                             fontWeight = FontWeight.Black,
@@ -209,7 +211,7 @@ private fun LikedSongsRow(vm: AppViewModel, songs: List<Track>) {
             Text("Auto playlist · ${songs.size} song${if (songs.size == 1) "" else "s"}", color = Brand.Muted, fontSize = 13.sp)
         }
         if (songs.isNotEmpty()) {
-            Text("SHUFFLE", Modifier.clickable { vm.playTracks(songs, 0, shuffle = true) }.padding(8.dp), color = Brand.Gold, fontWeight = FontWeight.Black, fontSize = 12.sp)
+            Text("Shuffle", Modifier.clip(CircleShape).clickable { vm.playTracks(songs, 0, shuffle = true) }.padding(horizontal = 12.dp, vertical = 8.dp), color = Brand.Gold, fontWeight = FontWeight.Medium, fontSize = 15.sp)
         }
     }
 }

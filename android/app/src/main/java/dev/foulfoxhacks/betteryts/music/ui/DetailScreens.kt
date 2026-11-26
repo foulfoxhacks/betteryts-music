@@ -1,7 +1,11 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import dev.foulfoxhacks.betteryts.music.ui.theme.ButtonTextStyle
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,10 +30,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.foulfoxhacks.betteryts.music.core.Collection
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
-import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
 
 /** Back arrow row used at the top of pushed pages. */
 @Composable
@@ -76,7 +77,7 @@ fun ArtistScreen(vm: AppViewModel, route: Route.ArtistRoute, pad: PaddingValues)
                             else Box(Modifier.fillMaxWidth().aspectRatio(16f / 5f).background(Brand.HeadingGradient))
                         }
                         Row(Modifier.padding(horizontal = 16.dp).offset(y = (-28).dp), verticalAlignment = Alignment.Bottom) {
-                            Box(Modifier.size(88.dp).clip(CircleShape).border(3.dp, Brand.Gold, CircleShape)) {
+                            Box(Modifier.size(88.dp).clip(CircleShape)) {
                                 RemoteImage(page.artist.thumbnail, Modifier.fillMaxSize())
                             }
                         }
@@ -118,7 +119,7 @@ fun CollectionScreen(vm: AppViewModel, c: Collection, pad: PaddingValues) {
                 LazyColumn(contentPadding = PaddingValues(bottom = pad.calculateBottomPadding())) {
                     item {
                         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            RemoteImage(page.thumbnail ?: c.thumbnail ?: page.tracks.firstOrNull()?.largeArt, Modifier.size(200.dp).border(1.dp, Brand.LineGold))
+                            RemoteImage(page.thumbnail ?: c.thumbnail ?: page.tracks.firstOrNull()?.largeArt, Modifier.size(200.dp).clip(RoundedCornerShape(20.dp)))
                             Eyebrow(if (c.isMix) "Mix" else "Playlist")
                             DisplayTitle(page.title, size = 32)
                             if (page.subtitle.isNotBlank()) Text(page.subtitle, color = Brand.Muted, fontSize = 13.sp)
@@ -155,7 +156,7 @@ fun UserPlaylistScreen(vm: AppViewModel, id: String, pad: PaddingValues) {
         LazyColumn(contentPadding = PaddingValues(bottom = pad.calculateBottomPadding())) {
             item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteImage(p.tracks.firstOrNull()?.largeArt, Modifier.size(200.dp).border(1.dp, Brand.LineGold))
+                    RemoteImage(p.tracks.firstOrNull()?.largeArt, Modifier.size(200.dp).clip(RoundedCornerShape(20.dp)))
                     Eyebrow("Your playlist")
                     DisplayTitle(p.name, size = 32)
                     Text("${p.tracks.size} song${if (p.tracks.size == 1) "" else "s"}", color = Brand.Muted, fontSize = 13.sp)
@@ -182,10 +183,10 @@ fun UserPlaylistScreen(vm: AppViewModel, id: String, pad: PaddingValues) {
         AlertDialog(
             onDismissRequest = { deleting = false },
             containerColor = Brand.Surface,
-            title = { Text("DELETE PLAYLIST?", style = LabelStyle, color = Brand.Tan) },
+            title = { Text("Delete playlist?", style = MaterialTheme.typography.titleLarge, color = Brand.Paper) },
             text = { Text("“${p.name}” will be removed from this phone. This can't be undone.", color = Brand.Paper) },
-            confirmButton = { TextButton(onClick = { deleting = false; vm.deletePlaylist(p.id) }) { Text("DELETE", style = LabelStyle, color = Brand.Ember) } },
-            dismissButton = { TextButton(onClick = { deleting = false }) { Text("CANCEL", style = LabelStyle, color = Brand.Muted) } },
+            confirmButton = { TextButton(onClick = { deleting = false; vm.deletePlaylist(p.id) }) { Text("Delete", style = ButtonTextStyle, color = Brand.Ember) } },
+            dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel", style = ButtonTextStyle, color = Brand.Muted) } },
         )
     }
 }

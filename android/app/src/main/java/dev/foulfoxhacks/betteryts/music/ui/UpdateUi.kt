@@ -5,8 +5,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,7 +30,7 @@ fun UpdateBanner(vm: AppViewModel) {
     val show = s is Updater.State.Downloading || s is Updater.State.Downloaded || s is Updater.State.Installing
     AnimatedVisibility(show, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         Column(
-            Modifier.fillMaxWidth().background(Brand.CardGradient).border(1.dp, Brand.LineGold).padding(horizontal = 14.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().card().padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             when (s) {

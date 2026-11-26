@@ -1,10 +1,12 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,10 +25,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,7 +53,7 @@ fun Avatar(vm: AppViewModel, size: Int, onClick: (() -> Unit)? = null) {
             Text(name.first().uppercase(), color = Brand.GoldInk, fontWeight = FontWeight.Black, fontSize = (size * 0.45).sp)
         }
     } else {
-        Image(painterResource(R.drawable.ic_launcher_art), "Account", m.border(1.dp, Brand.LineGold, CircleShape), contentScale = ContentScale.Crop)
+        Image(painterResource(R.drawable.ic_launcher_art), "Account", m, contentScale = ContentScale.Crop)
     }
 }
 
@@ -69,8 +69,8 @@ fun AccountSheet(vm: AppViewModel) {
         Column(
             Modifier
                 .fillMaxWidth(0.88f)
-                .background(Brand.Surface)
-                .border(1.dp, Brand.LineGold)
+                .clip(RoundedCornerShape(28.dp))
+                .background(Brand.Raised)
                 .verticalScroll(rememberScrollState()),
         ) {
             Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {

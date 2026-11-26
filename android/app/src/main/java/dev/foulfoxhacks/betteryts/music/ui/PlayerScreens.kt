@@ -1,11 +1,12 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -35,13 +36,11 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -54,7 +53,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.foulfoxhacks.betteryts.music.core.Core
 import dev.foulfoxhacks.betteryts.music.core.Repeat
 import dev.foulfoxhacks.betteryts.music.core.Track
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
@@ -397,7 +395,7 @@ private fun LazyListScope.roomPanel(vm: AppViewModel) {
         val context = LocalContext.current
         val s = vm.roomState
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).background(Brand.CardGradient).border(1.dp, Brand.LineGold).padding(14.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).card().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Eyebrow("Listen Together")
@@ -509,7 +507,7 @@ fun RoomIdleBar(vm: AppViewModel) {
     val r = vm.room ?: return
     val context = LocalContext.current
     Column(
-        Modifier.fillMaxWidth().background(Brand.CardGradient).border(1.dp, Brand.LineGold).padding(horizontal = 14.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().card().padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

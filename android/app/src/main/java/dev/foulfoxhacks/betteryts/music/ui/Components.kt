@@ -1,6 +1,16 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,10 +37,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,8 +52,8 @@ import dev.foulfoxhacks.betteryts.music.core.Artist
 import dev.foulfoxhacks.betteryts.music.core.Collection
 import dev.foulfoxhacks.betteryts.music.core.Track
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
+import dev.foulfoxhacks.betteryts.music.ui.theme.ButtonTextStyle
 import dev.foulfoxhacks.betteryts.music.ui.theme.EyebrowStyle
-import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
 import dev.foulfoxhacks.betteryts.music.ui.theme.displayStyle
 
 @Composable
@@ -53,49 +61,58 @@ fun Eyebrow(text: String, modifier: Modifier = Modifier) {
     Text(text.uppercase(), modifier, style = EyebrowStyle)
 }
 
+/** Page headline: heavy, sentence case, solid colour (Mello Zone's "Welcome home"). */
 @Composable
-fun DisplayTitle(text: String, modifier: Modifier = Modifier, size: Int = 40, brush: Brush = Brand.TitleGradient, maxLines: Int = 3) {
-    Text(text.uppercase(), modifier, style = displayStyle(size, brush), maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+fun DisplayTitle(text: String, modifier: Modifier = Modifier, size: Int = 34, brush: Brush = Brand.TitleGradient, maxLines: Int = 3) {
+    Text(text, modifier, style = displayStyle(minOf(size, 34), brush), maxLines = maxLines, overflow = TextOverflow.Ellipsis)
 }
 
+/** A section title (sentence-case headline) with an optional text action on the right. */
 @Composable
 fun SectionHeader(title: String, modifier: Modifier = Modifier, action: String? = null, onAction: () -> Unit = {}) {
-    Row(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        DisplayTitle(title, Modifier.weight(1f), size = 24, brush = Brand.HeadingGradient, maxLines = 1)
-        if (action != null) {
-            Text(action.uppercase(), Modifier.clickable(onClick = onAction).padding(8.dp), style = LabelStyle, color = Brand.Gold)
-        }
+    Row(modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, color = Brand.Paper, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (action != null) TextButton(onClick = onAction) { Text(action, color = Brand.Gold, style = ButtonTextStyle) }
     }
 }
 
-/** Square, uppercase, tracked: primary is solid gold; secondary is the copper gradient with a gold border. */
+/** Pill buttons: primary is filled with the accent; secondary is outlined with accent text. */
 @Composable
 fun BrandButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, primary: Boolean = false, icon: ImageVector? = null, enabled: Boolean = true) {
-    val base = modifier
-        .then(if (primary) Modifier.background(if (enabled) Brand.Gold else Brand.Raised) else Modifier.background(Brand.ButtonGradient).border(1.dp, Brand.LineGold))
-        .clickable(enabled = enabled, onClick = onClick)
-        .padding(horizontal = 16.dp, vertical = 11.dp)
-    Row(base, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        val color = if (primary) Brand.GoldInk else Brand.Paper
+    val content: @Composable RowScope.() -> Unit = {
         if (icon != null) {
-            Icon(icon, null, Modifier.size(18.dp), tint = color)
+            Icon(icon, null, Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text.uppercase(), style = LabelStyle, color = color)
+        Text(text, style = ButtonTextStyle)
+    }
+    val pad = PaddingValues(horizontal = 22.dp, vertical = 12.dp)
+    if (primary) {
+        Button(onClick, modifier, enabled = enabled, shape = CircleShape, contentPadding = pad, content = content,
+            colors = ButtonDefaults.buttonColors(containerColor = Brand.Gold, contentColor = Brand.GoldInk))
+    } else {
+        OutlinedButton(onClick, modifier, enabled = enabled, shape = CircleShape, contentPadding = pad, content = content,
+            border = BorderStroke(1.dp, Brand.Muted.copy(alpha = 0.45f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Brand.Gold))
     }
 }
 
+/** Pill filter chip: filled accent when selected, a hairline outline otherwise. */
 @Composable
 fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .then(if (selected) Modifier.background(Brand.Gold) else Modifier.border(1.dp, Brand.Line))
+            .clip(CircleShape)
+            .then(if (selected) Modifier.background(Brand.Gold) else Modifier.border(1.dp, Brand.Muted.copy(alpha = 0.35f), CircleShape))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        Text(text.uppercase(), style = LabelStyle, color = if (selected) Brand.GoldInk else Brand.Paper)
+        Text(text, style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp), color = if (selected) Brand.GoldInk else Brand.Paper)
     }
 }
+
+/** A flat, rounded surface for grouped content (replaces the old framed panels). */
+fun Modifier.card(): Modifier = this.clip(RoundedCornerShape(16.dp)).background(Brand.Surface)
 
 @Composable
 fun Loading(modifier: Modifier = Modifier) {
@@ -107,10 +124,10 @@ fun Loading(modifier: Modifier = Modifier) {
 @Composable
 fun ErrorBox(message: String, onRetry: (() -> Unit)? = null) {
     Column(
-        Modifier.fillMaxWidth().padding(16.dp).background(Brand.CardGradient).border(1.dp, Brand.Line).padding(18.dp),
+        Modifier.fillMaxWidth().padding(16.dp).card().padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(message, color = Brand.Paper)
+        Text(message, color = Brand.Paper, style = MaterialTheme.typography.bodyLarge)
         if (onRetry != null) BrandButton("Try again", onRetry)
     }
 }
@@ -121,13 +138,12 @@ fun EmptyNote(title: String, body: String) {
         Modifier
             .fillMaxWidth()
             .padding(16.dp)
-            .background(Brand.CardGradient)
-            .border(1.dp, Brand.Line)
+            .card()
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(title.uppercase(), style = LabelStyle, color = Brand.Tan)
-        Text(body, color = Brand.Muted, fontSize = 14.sp)
+        Text(title, style = MaterialTheme.typography.titleMedium, color = Brand.Paper)
+        Text(body, color = Brand.Muted, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -153,7 +169,7 @@ fun TrackRow(
         if (leading != null) {
             Text(leading, Modifier.width(28.dp), color = if (current) Brand.Gold else Brand.Muted, fontSize = 13.sp)
         }
-        RemoteImage(track.art, Modifier.size(52.dp).then(if (current) Modifier.border(2.dp, Brand.Gold) else Modifier))
+        RemoteImage(track.art, Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(track.title, color = if (current) Brand.Gold else Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(track.subtitle, color = Brand.Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -192,7 +208,7 @@ private fun MenuItem(label: String, close: () -> Unit, action: () -> Unit) {
 @Composable
 fun TrackCard(track: Track, onClick: () -> Unit) {
     Column(Modifier.width(144.dp).clickable(onClick = onClick)) {
-        RemoteImage(track.art, Modifier.size(144.dp))
+        RemoteImage(track.art, Modifier.size(144.dp).clip(RoundedCornerShape(14.dp)))
         Text(track.title, Modifier.padding(top = 8.dp), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(track.artist, color = Brand.Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -201,7 +217,7 @@ fun TrackCard(track: Track, onClick: () -> Unit) {
 @Composable
 fun CollectionRow(c: Collection, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        RemoteImage(c.thumbnail, Modifier.size(64.dp))
+        RemoteImage(c.thumbnail, Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)))
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(c.title, color = Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             // The core's mix subtitles already start with "Mix"; playlists get their label here.
@@ -229,8 +245,8 @@ fun ArtistRow(a: Artist, onClick: () -> Unit) {
 fun AddToPlaylistDialog(vm: AppViewModel, track: Track) {
     AlertDialog(
         onDismissRequest = { vm.playlistPickerFor = null },
-        containerColor = Brand.Surface,
-        title = { Text("ADD TO PLAYLIST", style = LabelStyle, color = Brand.Tan) },
+        containerColor = Brand.Raised,
+        title = { Text("Add to playlist", style = MaterialTheme.typography.titleLarge, color = Brand.Paper) },
         text = {
             LazyColumn(Modifier.height(320.dp)) {
                 item {
@@ -252,7 +268,7 @@ fun AddToPlaylistDialog(vm: AppViewModel, track: Track) {
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = { vm.playlistPickerFor = null }) { Text("CANCEL", style = LabelStyle, color = Brand.Muted) } },
+        dismissButton = { TextButton(onClick = { vm.playlistPickerFor = null }) { Text("Cancel", style = ButtonTextStyle, color = Brand.Muted) } },
     )
 }
 
@@ -262,8 +278,8 @@ fun JoinRoomDialog(onDismiss: () -> Unit, onJoin: (String) -> Unit) {
     val valid = Regex("^[A-HJ-NP-Z2-9]{6}$").matches(code)
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.Surface,
-        title = { Text("JOIN A ROOM", style = LabelStyle, color = Brand.Tan) },
+        containerColor = Brand.Raised,
+        title = { Text("Join a room", style = MaterialTheme.typography.titleLarge, color = Brand.Paper) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Enter the 6-character code from a BetterYTS watch party (web, app or VRChat).", color = Brand.Muted, fontSize = 13.sp)
@@ -273,12 +289,12 @@ fun JoinRoomDialog(onDismiss: () -> Unit, onJoin: (String) -> Unit) {
                     singleLine = true,
                     placeholder = { Text("ABC234", color = Brand.Muted) },
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp, color = Brand.Paper),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Line, cursorColor = Brand.Gold),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Muted.copy(alpha = 0.45f), cursorColor = Brand.Gold),
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onJoin(code) }, enabled = valid) { Text("JOIN", style = LabelStyle, color = if (valid) Brand.Gold else Brand.Muted) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", style = LabelStyle, color = Brand.Muted) } },
+        confirmButton = { TextButton(onClick = { onJoin(code) }, enabled = valid) { Text("Join", style = ButtonTextStyle, color = if (valid) Brand.Gold else Brand.Muted) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", style = ButtonTextStyle, color = Brand.Muted) } },
     )
 }
 
@@ -287,18 +303,18 @@ fun NamePlaylistDialog(title: String, initial: String, confirm: String, onDismis
     var name by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Brand.Surface,
-        title = { Text(title.uppercase(), style = LabelStyle, color = Brand.Tan) },
+        containerColor = Brand.Raised,
+        title = { Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Paper) },
         text = {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it.take(80) },
                 singleLine = true,
                 placeholder = { Text("Playlist name", color = Brand.Muted) },
-                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Line, cursorColor = Brand.Gold, focusedTextColor = Brand.Paper, unfocusedTextColor = Brand.Paper),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Muted.copy(alpha = 0.45f), cursorColor = Brand.Gold, focusedTextColor = Brand.Paper, unfocusedTextColor = Brand.Paper),
             )
         },
-        confirmButton = { TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) { Text(confirm.uppercase(), style = LabelStyle, color = Brand.Gold) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", style = LabelStyle, color = Brand.Muted) } },
+        confirmButton = { TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) { Text(confirm, style = ButtonTextStyle, color = Brand.Gold) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", style = ButtonTextStyle, color = Brand.Muted) } },
     )
 }

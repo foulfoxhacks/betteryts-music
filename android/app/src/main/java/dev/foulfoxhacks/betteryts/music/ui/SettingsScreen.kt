@@ -1,5 +1,11 @@
 package dev.foulfoxhacks.betteryts.music.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,20 +28,16 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.foulfoxhacks.betteryts.music.core.Core
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
-import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
 import dev.foulfoxhacks.betteryts.music.ui.theme.Palette
 import dev.foulfoxhacks.betteryts.music.ui.theme.Palettes
 
@@ -134,19 +136,20 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
 private fun ThemeCard(p: Palette, name: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Column(
         modifier
-            .background(Brush.linearGradient(p.card))
-            .border(if (selected) 2.dp else 1.dp, if (selected) p.accent else p.line)
+            .clip(RoundedCornerShape(16.dp))
+            .background(p.surface)
+            .border(if (selected) 2.dp else 1.dp, if (selected) p.accent else p.line, RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // A tiny preview: title gradient, accent button, swatches.
-        Text(name.substringBefore(" ·").uppercase(), style = dev.foulfoxhacks.betteryts.music.ui.theme.displayStyle(22, Brush.linearGradient(p.title)))
+        // A tiny preview: name, swatches, accent pill.
+        Text(name.substringBefore(" ·"), style = MaterialTheme.typography.titleLarge, color = p.paper)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(p.accent, p.eyebrow, p.violet, p.hot, p.love).forEach { Box(Modifier.size(14.dp).background(it)) }
+            listOf(p.accent, p.eyebrow, p.violet, p.hot, p.love).forEach { Box(Modifier.size(14.dp).clip(CircleShape).background(it)) }
         }
-        Box(Modifier.background(p.accent).padding(horizontal = 8.dp, vertical = 4.dp)) {
-            Text(if (selected) "IN USE" else "USE", style = LabelStyle, fontSize = 10.sp, color = p.onAccent)
+        Box(Modifier.clip(CircleShape).background(p.accent).padding(horizontal = 12.dp, vertical = 4.dp)) {
+            Text(if (selected) "In use" else "Use", style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp), color = p.onAccent)
         }
         Text(name.substringAfter("· ", ""), color = p.muted, fontSize = 11.sp)
     }
@@ -158,7 +161,7 @@ private fun ToggleRow(icon: ImageVector, title: String, description: String, che
         Modifier.fillMaxWidth().clickable { onToggle(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(40.dp).border(1.dp, Brand.LineGold), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Brand.Raised), contentAlignment = Alignment.Center) {
             Icon(icon, null, Modifier.size(20.dp), tint = if (checked) Brand.Gold else Brand.Muted)
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
@@ -179,7 +182,7 @@ private fun PluginRow(p: Core.PluginInfo, onToggle: (Boolean) -> Unit) {    Row(
         Modifier.fillMaxWidth().clickable { onToggle(!p.enabled) }.padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(40.dp).border(1.dp, Brand.LineGold), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Brand.Raised), contentAlignment = Alignment.Center) {
             Icon(pluginIcon(p.id), null, Modifier.size(20.dp), tint = if (p.enabled) Brand.Gold else Brand.Muted)
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {

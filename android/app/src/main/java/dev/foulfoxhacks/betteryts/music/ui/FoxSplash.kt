@@ -33,9 +33,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
 import dev.foulfoxhacks.betteryts.music.ui.theme.LabelStyle
 import dev.foulfoxhacks.betteryts.music.ui.theme.displayStyle
@@ -102,8 +100,8 @@ fun FoxSplash(onDone: () -> Unit) {
                 .drawWithContent { clipRect(right = size.width * r) { this@drawWithContent.drawContent() } },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("BETTERYTS", style = displayStyle(44, Brush.linearGradient(Brand.palette.title)))
-            Text("MUSIC · BY FOULFOXHACKS", style = LabelStyle, color = Brand.Tan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("BetterYTS Music", style = displayStyle(34))
+            Text("BY FOULFOXHACKS", style = LabelStyle, color = Brand.Tan)
         }
     }
 }
