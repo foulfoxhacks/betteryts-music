@@ -24,16 +24,20 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default ("tools platform-tools") fails on cmdline-tools 16+, where the legacy
+          # "tools" package no longer exists. The next step installs what the build needs.
+          packages: ""
 
       - name: Install Android SDK platform and NDK
         shell: bash
