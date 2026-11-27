@@ -14,6 +14,13 @@ pub const MAX_PLAYLISTS: usize = 100;
 pub const MAX_PLAYLIST_TRACKS: usize = 1000;
 pub const MAX_FOLLOWED: usize = 300;
 pub const MAX_FAVORITES: usize = 5000;
+pub const MAX_SEARCHES: usize = 50;
+pub const MAX_PINS: usize = 24;
+/// Play statistics kept per track (least recently played dropped first).
+pub const MAX_STATS: usize = 2000;
+/// Days with listening, for streaks (about 13 months).
+pub const MAX_DAYS: usize = 400;
+pub const MAX_SMART: usize = 30;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +53,64 @@ pub struct ImportSummary {
 	pub artists_added: usize,
 }
 
+/// How often and how long a track has been played. Only on the phone; never in backups or sent anywhere.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayStat {
+	pub track: Track,
+	pub count: u32,
+	pub first_played: u64,
+	pub last_played: u64,
+	/// Seconds actually listened (reported by the app as songs stop), not the song's length.
+	#[serde(default)]
+	pub seconds: u64,
+}
+
+/// When listening happens, for local insights: plays per local hour, and the local days with any plays.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Listening {
+	pub hours: [u32; 24],
+	/// Local epoch days (days since 1970-01-01 in the phone's time zone), ascending, unique.
+	pub days: Vec<u32>,
+	pub seconds: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchEntry {
+	pub query: String,
+	pub at: u64,
+}
+
+/// One "Send to a VRChat world", remembered on the phone (never the code itself).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldSend {
+	pub at: u64,
+	pub service: String,
+	pub playlists: u64,
+	pub tracks: u64,
+	/// Kept for the next visit (30 days) rather than this visit only.
+	pub saved: bool,
+	#[serde(default)]
+	pub expires_at: Option<u64>,
+	/// Playlist names sent (for "what did I send?").
+	#[serde(default)]
+	pub names: Vec<String>,
+}
+
+pub const MAX_WORLD_SENDS: usize = 20;
+pub const SAVED_WORLD_DAYS: u64 = 30;
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSmart {
+	pub id: String,
+	pub name: String,
+	pub rule: crate::smart::Rule,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Library {
@@ -53,6 +118,16 @@ pub struct Library {
 	pub history: Vec<HistoryEntry>,
 	pub playlists: Vec<UserPlaylist>,
 	pub followed: Vec<Artist>,
+	pub stats: Vec<PlayStat>,
+	pub listening: Listening,
+	/// Recent searches, newest first. Local only.
+	pub searches: Vec<SearchEntry>,
+	/// Pinned items, in order: "playlist:<id>", "artist:<id>", "station:<id>", "smart:<id>".
+	pub pinned: Vec<String>,
+	/// The user's own smart playlists (rules, not tracks: they refresh as the library changes).
+	pub smart: Vec<SavedSmart>,
+	/// Recent sends to VRChat worlds, newest first.
+	pub world_sends: Vec<WorldSend>,
 }
 
 fn now_ms() -> u64 {
@@ -123,6 +198,8 @@ impl Library {
 	pub fn delete_playlist(&mut self, id: &str) -> bool {
 		let before = self.playlists.len();
 		self.playlists.retain(|p| p.id != id);
+		let key = format!("playlist:{id}");
+		self.pinned.retain(|k| k != &key);
 		self.playlists.len() != before
 	}
 
@@ -188,6 +265,208 @@ impl Library {
 			}
 		}
 		sum
+	}
+
+	// ---- play statistics and insights ----
+
+	/// Counts a play. `hour` (0–23) and `day` (local epoch day) come from the phone, which knows its
+	/// time zone; without them only the count is kept.
+	pub fn record_play(&mut self, track: &Track, at: u64, hour: Option<u32>, day: Option<u32>) {
+		if let Some(s) = self.stats.iter_mut().find(|s| s.track.id == track.id) {
+			s.count = s.count.saturating_add(1);
+			s.last_played = at;
+			s.track = track.clone();
+		} else {
+			if self.stats.len() >= MAX_STATS {
+				// Forget whatever was played least recently.
+				if let Some(i) = self.stats.iter().enumerate().min_by_key(|(_, s)| s.last_played).map(|(i, _)| i) {
+					self.stats.swap_remove(i);
+				}
+			}
+			self.stats.push(PlayStat { track: track.clone(), count: 1, first_played: at, last_played: at, seconds: 0 });
+		}
+		if let Some(h) = hour.filter(|h| *h < 24) {
+			self.listening.hours[h as usize] = self.listening.hours[h as usize].saturating_add(1);
+		}
+		if let Some(d) = day {
+			if let Err(i) = self.listening.days.binary_search(&d) {
+				self.listening.days.insert(i, d);
+				if self.listening.days.len() > MAX_DAYS {
+					self.listening.days.remove(0);
+				}
+			}
+		}
+	}
+
+	/// Adds listened time for a track (capped per report, so a stuck player can't inflate it).
+	pub fn add_listened(&mut self, id: &str, seconds: u64) {
+		let secs = seconds.min(6 * 3600);
+		self.listening.seconds = self.listening.seconds.saturating_add(secs);
+		if let Some(s) = self.stats.iter_mut().find(|s| s.track.id == id) {
+			s.seconds = s.seconds.saturating_add(secs);
+		}
+	}
+
+	pub fn plays_of(&self, id: &str) -> u32 {
+		self.stats.iter().find(|s| s.track.id == id).map(|s| s.count).unwrap_or(0)
+	}
+
+	pub fn clear_stats(&mut self) {
+		self.stats.clear();
+		self.listening = Listening::default();
+	}
+
+	pub fn remove_history(&mut self, id: &str) -> bool {
+		let before = self.history.len();
+		self.history.retain(|h| h.track.id != id);
+		self.history.len() != before
+	}
+
+	// ---- search history ----
+
+	pub fn add_search(&mut self, query: &str, at: u64) {
+		let q = clip(&query.split_whitespace().collect::<Vec<_>>().join(" "), 120);
+		if q.is_empty() {
+			return;
+		}
+		self.searches.retain(|e| !e.query.eq_ignore_ascii_case(&q));
+		self.searches.insert(0, SearchEntry { query: q, at });
+		self.searches.truncate(MAX_SEARCHES);
+	}
+
+	pub fn remove_search(&mut self, query: &str) -> bool {
+		let before = self.searches.len();
+		self.searches.retain(|e| !e.query.eq_ignore_ascii_case(query.trim()));
+		self.searches.len() != before
+	}
+
+	// ---- pins ----
+
+	/// Returns whether the item is now pinned. Keys are "kind:id" for playlist, artist, station or smart.
+	pub fn toggle_pin(&mut self, key: &str) -> bool {
+		let key = clip(key, 120);
+		let valid = ["playlist:", "artist:", "station:", "smart:"].iter().any(|p| key.len() > p.len() && key.starts_with(p));
+		if !valid {
+			return false;
+		}
+		if self.pinned.contains(&key) {
+			self.pinned.retain(|k| k != &key);
+			false
+		} else if self.pinned.len() >= MAX_PINS {
+			false
+		} else {
+			self.pinned.insert(0, key);
+			true
+		}
+	}
+
+	// ---- playlist editing ----
+
+	/// Moves a track inside a playlist.
+	pub fn move_in_playlist(&mut self, id: &str, from: usize, to: usize) -> bool {
+		match self.playlist_mut(id) {
+			Some(p) if from < p.tracks.len() && to < p.tracks.len() && from != to => {
+				let t = p.tracks.remove(from);
+				p.tracks.insert(to, t);
+				true
+			}
+			_ => false,
+		}
+	}
+
+	/// Removes several positions at once (multi-select). Returns how many went.
+	pub fn remove_many_from_playlist(&mut self, id: &str, indexes: &[usize]) -> usize {
+		let Some(p) = self.playlist_mut(id) else { return 0 };
+		let mut idx: Vec<usize> = indexes.iter().copied().filter(|i| *i < p.tracks.len()).collect();
+		idx.sort_unstable();
+		idx.dedup();
+		for i in idx.iter().rev() {
+			p.tracks.remove(*i);
+		}
+		idx.len()
+	}
+
+	/// Adds several tracks, skipping ones already there. Returns how many were added.
+	pub fn add_many_to_playlist(&mut self, id: &str, tracks: Vec<Track>) -> usize {
+		let Some(p) = self.playlist_mut(id) else { return 0 };
+		let mut added = 0;
+		for t in tracks {
+			if p.tracks.len() >= MAX_PLAYLIST_TRACKS {
+				break;
+			}
+			if !p.tracks.iter().any(|x| x.id == t.id) {
+				p.tracks.push(t);
+				added += 1;
+			}
+		}
+		added
+	}
+
+	/// Drops repeated songs (same video, or the same title by the same artist). Returns how many went.
+	pub fn dedupe_playlist(&mut self, id: &str) -> usize {
+		let Some(p) = self.playlist_mut(id) else { return 0 };
+		let before = p.tracks.len();
+		let mut seen = std::collections::HashSet::new();
+		p.tracks.retain(|t| {
+			let by_id = seen.insert(format!("id:{}", t.id));
+			let by_name = seen.insert(format!("name:{}|{}", crate::plugins::compact(&t.title), crate::plugins::compact(&t.artist)));
+			by_id && by_name
+		});
+		before - p.tracks.len()
+	}
+
+	/// Copies `source`'s tracks into `target` (no duplicates); optionally deletes `source`.
+	pub fn merge_playlists(&mut self, target: &str, source: &str, delete_source: bool) -> Option<usize> {
+		if target == source {
+			return None;
+		}
+		let tracks = self.playlists.iter().find(|p| p.id == source)?.tracks.clone();
+		self.playlists.iter().find(|p| p.id == target)?;
+		let added = self.add_many_to_playlist(target, tracks);
+		if delete_source {
+			self.delete_playlist(source);
+			self.pinned.retain(|k| k != &format!("playlist:{source}"));
+		}
+		Some(added)
+	}
+
+	pub fn duplicate_playlist(&mut self, id: &str) -> Option<UserPlaylist> {
+		let p = self.playlists.iter().find(|p| p.id == id)?.clone();
+		self.create_playlist(&format!("{} (copy)", p.name), p.tracks)
+	}
+
+	// ---- VRChat world sends ----
+
+	pub fn record_world_send(&mut self, mut send: WorldSend) {
+		if send.saved {
+			send.expires_at = Some(send.at + SAVED_WORLD_DAYS * 86_400_000);
+		}
+		send.names = send.names.iter().take(crate::inworld::MAX_PLAYLISTS).map(|n| clip(n, 80)).collect();
+		self.world_sends.insert(0, send);
+		self.world_sends.truncate(MAX_WORLD_SENDS);
+	}
+
+	// ---- user smart playlists ----
+
+	pub fn save_smart(&mut self, name: &str, rule: crate::smart::Rule) -> Option<SavedSmart> {
+		if self.smart.len() >= MAX_SMART {
+			return None;
+		}
+		let name = clip(name, 80);
+		let mut id = format!("s{:x}", now_ms());
+		while self.smart.iter().any(|s| s.id == id) {
+			id.push('x');
+		}
+		let s = SavedSmart { id, name: if name.is_empty() { "Smart playlist".into() } else { name }, rule: rule.clamped() };
+		self.smart.insert(0, s.clone());
+		Some(s)
+	}
+
+	pub fn delete_smart(&mut self, id: &str) -> bool {
+		let before = self.smart.len();
+		self.smart.retain(|s| s.id != id);
+		self.pinned.retain(|k| k != &format!("smart:{id}"));
+		self.smart.len() != before
 	}
 
 	pub fn is_following(&self, id: &str) -> bool {
@@ -338,6 +617,84 @@ mod tests {
 		let imported = l.playlists.iter().find(|p| p.source.is_some()).unwrap();
 		assert_eq!((imported.name.as_str(), imported.tracks.len()), ("Road trip 2", 1));
 		assert!(l.playlists.iter().any(|p| p.name == "Made here" && p.source.is_none()), "app-made playlist untouched");
+	}
+
+	#[test]
+	fn search_history_pins_and_history_removal() {
+		let mut l = Library::default();
+		l.add_search("  lofi   hip hop ", 1);
+		l.add_search("daft punk", 2);
+		l.add_search("LOFI HIP HOP", 3);
+		assert_eq!(l.searches.iter().map(|e| e.query.as_str()).collect::<Vec<_>>(), ["LOFI HIP HOP", "daft punk"], "re-searching moves it to the top");
+		l.add_search("   ", 4);
+		assert_eq!(l.searches.len(), 2);
+		for i in 0..80 {
+			l.add_search(&format!("q{i}"), i);
+		}
+		assert_eq!(l.searches.len(), MAX_SEARCHES);
+		assert!(l.remove_search("q79"));
+		assert!(!l.remove_search("q79"));
+
+		assert!(l.toggle_pin("playlist:p1"));
+		assert!(!l.toggle_pin("playlist:"), "needs an id");
+		assert!(!l.toggle_pin("anything:p1"), "unknown kinds refused");
+		assert!(!l.toggle_pin("playlist:p1"), "toggles off");
+		let p = l.create_playlist("x", vec![]).unwrap();
+		l.toggle_pin(&format!("playlist:{}", p.id));
+		l.delete_playlist(&p.id);
+		assert!(l.pinned.is_empty(), "deleting a playlist unpins it");
+
+		l.add_history(t("a"), 1);
+		l.add_history(t("b"), 2);
+		assert!(l.remove_history("a"));
+		assert_eq!(l.history.len(), 1);
+	}
+
+	#[test]
+	fn batch_playlist_editing() {
+		let mut l = Library::default();
+		let a = l.create_playlist("A", vec![t("1"), t("2"), t("3"), t("4")]).unwrap();
+		assert!(l.move_in_playlist(&a.id, 0, 3));
+		let order = |l: &Library, id: &str| l.playlists.iter().find(|p| p.id == id).unwrap().tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+		assert_eq!(order(&l, &a.id), ["2", "3", "4", "1"]);
+		assert!(!l.move_in_playlist(&a.id, 0, 9));
+		assert_eq!(l.remove_many_from_playlist(&a.id, &[3, 0, 0, 42]), 2);
+		assert_eq!(order(&l, &a.id), ["3", "4"]);
+		assert_eq!(l.add_many_to_playlist(&a.id, vec![t("4"), t("5"), t("5")]), 1);
+
+		let mut same_song = t("6");
+		same_song.title = "3".into(); // t("3") has title "3" and artist "A" too
+		l.playlist_mut(&a.id).unwrap().tracks.push(same_song);
+		assert_eq!(l.dedupe_playlist(&a.id), 1, "the same title by the same artist counts as a repeat");
+
+		let b = l.create_playlist("B", vec![t("5"), t("7")]).unwrap();
+		l.toggle_pin(&format!("playlist:{}", b.id));
+		assert_eq!(l.merge_playlists(&a.id, &b.id, true), Some(1));
+		assert!(l.playlists.iter().all(|p| p.id != b.id), "source deleted");
+		assert!(l.pinned.is_empty());
+		assert_eq!(l.merge_playlists(&a.id, &a.id, false), None);
+		let copy = l.duplicate_playlist(&a.id).unwrap();
+		assert_eq!((copy.name.as_str(), copy.tracks.len()), ("A (copy)", 4));
+	}
+
+	#[test]
+	fn play_stats_are_bounded() {
+		let mut l = Library::default();
+		l.record_play(&t("a"), 10, Some(7), Some(5));
+		l.record_play(&t("a"), 20, Some(7), Some(5));
+		l.record_play(&t("b"), 30, Some(99), None);
+		assert_eq!((l.plays_of("a"), l.plays_of("b"), l.plays_of("c")), (2, 1, 0));
+		assert_eq!(l.listening.hours[7], 2);
+		assert_eq!(l.listening.hours.iter().sum::<u32>(), 2, "a bad hour is ignored");
+		assert_eq!(l.listening.days, [5]);
+		for i in 0..MAX_STATS {
+			l.record_play(&t(&format!("{i:011}")), 100 + i as u64, None, Some(i as u32));
+		}
+		assert_eq!(l.stats.len(), MAX_STATS);
+		assert_eq!(l.plays_of("a"), 0, "least recently played forgotten first");
+		assert_eq!(l.listening.days.len(), MAX_DAYS);
+		l.clear_stats();
+		assert!(l.stats.is_empty() && l.listening.days.is_empty());
 	}
 
 	#[test]

@@ -75,10 +75,24 @@ pub fn parse(v: &Value) -> RadioPage {
 	RadioPage { tracks, next }
 }
 
+fn context(region: &str) -> Value {
+	let gl = if region.is_empty() { "US" } else { region };
+	json!({ "client": { "clientName": "WEB_REMIX", "clientVersion": CLIENT_VERSION, "hl": "en", "gl": gl } })
+}
+
+/// A YouTube playlist's radio (YouTube Music's `RDAMPL<playlist>` watch playlist). Not every
+/// playlist has one; the caller falls back to growing a radio from one of its songs.
+pub fn playlist_radio(playlist_id: &str, region: &str) -> Result<RadioPage, String> {
+	if playlist_id.is_empty() || !playlist_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+		return Err("That isn't a playlist ID".into());
+	}
+	let body = json!({ "context": context(region), "playlistId": format!("RDAMPL{playlist_id}"), "enablePersistentPlaylistPanel": true, "isAudioOnly": true });
+	post(&body)
+}
+
 /// Radio seeded from `video_id`, or the next page of one when `continuation` is given.
 pub fn radio(video_id: &str, continuation: Option<&str>, region: &str) -> Result<RadioPage, String> {
-	let gl = if region.is_empty() { "US" } else { region };
-	let context = json!({ "client": { "clientName": "WEB_REMIX", "clientVersion": CLIENT_VERSION, "hl": "en", "gl": gl } });
+	let context = context(region);
 	let body = match continuation {
 		Some(c) => json!({ "context": context, "continuation": c, "enablePersistentPlaylistPanel": true, "isAudioOnly": true }),
 		None => json!({
@@ -90,6 +104,31 @@ pub fn radio(video_id: &str, continuation: Option<&str>, region: &str) -> Result
 			"tunerSettingValue": "AUTOMIX_SETTING_NORMAL",
 		}),
 	};
+	let page = post(&body)?;
+	if page.tracks.is_empty() && continuation.is_none() {
+		return Err("No radio for this song".into());
+	}
+	Ok(page)
+}
+
+fn post(body: &Value) -> Result<RadioPage, String> {
+	let started = std::time::Instant::now();
+	let result = post_inner(body);
+	crate::diag::record(crate::diag::RequestRecord {
+		at: crate::library::Store::now(),
+		method: "POST",
+		route: "music.youtube.com/youtubei/v1/next".into(),
+		status: if result.is_ok() { 200 } else { 0 },
+		ms: started.elapsed().as_millis() as u64,
+		cached: false,
+		retries: 0,
+		error: result.as_ref().err().map(|_| "RADIO".to_string()),
+		request_id: None,
+	});
+	result
+}
+
+fn post_inner(body: &Value) -> Result<RadioPage, String> {
 	let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout(Duration::from_secs(20)).user_agent(UA).build();
 	let res = agent
 		.post(NEXT)
@@ -102,11 +141,7 @@ pub fn radio(video_id: &str, continuation: Option<&str>, region: &str) -> Result
 			ureq::Error::Transport(t) => format!("Radio: can't connect ({})", t.kind()),
 		})?;
 	let v: Value = res.into_string().ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or("Radio: unexpected response")?;
-	let page = parse(&v);
-	if page.tracks.is_empty() && continuation.is_none() {
-		return Err("No radio for this song".into());
-	}
-	Ok(page)
+	Ok(parse(&v))
 }
 
 #[cfg(test)]

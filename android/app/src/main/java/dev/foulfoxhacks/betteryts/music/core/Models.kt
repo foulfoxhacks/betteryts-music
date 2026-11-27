@@ -212,6 +212,16 @@ data class QueueState(
 data class UserPlaylist(val id: String, val name: String, val tracks: List<Track>, val createdAt: Long, val source: String? = null) {
     val fromYouTube get() = source?.startsWith("youtube:") == true
 
+    /** Where it came from, for the source badge ("From YouTube", "From a backup"…), or null if made here. */
+    val sourceLabel: String?
+        get() = when {
+            source == null -> null
+            source.startsWith("youtube:") -> "From YouTube"
+            source.startsWith("backup:") -> "From a backup"
+            source.startsWith("spotify:") -> "From Spotify"
+            else -> "Imported"
+        }
+
     companion object {
         fun from(o: JSONObject): UserPlaylist? {
             val id = o.str("id") ?: return null
@@ -225,7 +235,14 @@ data class Library(
     val history: List<Track> = emptyList(),
     val playlists: List<UserPlaylist> = emptyList(),
     val followed: List<Artist> = emptyList(),
+    /** Recent searches, newest first (only on this phone). */
+    val searches: List<String> = emptyList(),
+    /** "playlist:<id>", "artist:<id>", "station:<id>", "smart:<id>". */
+    val pinned: List<String> = emptyList(),
+    val worldSends: List<WorldSend> = emptyList(),
 ) {
+    fun isPinned(key: String) = key in pinned
+
     private val favoriteIds: Set<String> by lazy { favorites.mapTo(HashSet()) { it.id } }
     private val followedIds: Set<String> by lazy { followed.flatMapTo(HashSet()) { listOfNotNull(it.id, it.handle) } }
 
@@ -240,6 +257,24 @@ data class Library(
             history = Track.list(o.optJSONArray("history")),
             playlists = o.optJSONArray("playlists").mapObjects(UserPlaylist::from),
             followed = o.optJSONArray("followed").mapObjects(Artist::from),
+            searches = o.optJSONArray("searches").mapObjects { it.str("query") },
+            pinned = o.optJSONArray("pinned")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).takeIf(String::isNotBlank) } } ?: emptyList(),
+            worldSends = o.optJSONArray("worldSends").mapObjects(WorldSend::from),
+        )
+    }
+}
+
+/** A past "Send to a VRChat world" (the code itself is never kept). */
+data class WorldSend(val at: Long, val service: String, val playlists: Int, val tracks: Int, val saved: Boolean, val expiresAt: Long?, val names: List<String>) {
+    companion object {
+        fun from(o: JSONObject) = WorldSend(
+            at = o.optLong("at"),
+            service = o.str("service") ?: "youtube",
+            playlists = o.optInt("playlists"),
+            tracks = o.optInt("tracks"),
+            saved = o.optBoolean("saved"),
+            expiresAt = if (o.has("expiresAt") && !o.isNull("expiresAt")) o.optLong("expiresAt") else null,
+            names = o.optJSONArray("names")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
         )
     }
 }

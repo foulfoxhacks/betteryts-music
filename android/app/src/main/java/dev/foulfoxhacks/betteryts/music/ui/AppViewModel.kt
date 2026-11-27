@@ -23,7 +23,12 @@ import dev.foulfoxhacks.betteryts.music.core.Library
 import dev.foulfoxhacks.betteryts.music.core.Link
 import dev.foulfoxhacks.betteryts.music.core.QueueState
 import dev.foulfoxhacks.betteryts.music.core.Repeat
+import dev.foulfoxhacks.betteryts.music.core.SmartPlaylist
+import dev.foulfoxhacks.betteryts.music.core.SmartRule
+import dev.foulfoxhacks.betteryts.music.core.Station
+import dev.foulfoxhacks.betteryts.music.core.Stations
 import dev.foulfoxhacks.betteryts.music.core.Track
+import dev.foulfoxhacks.betteryts.music.core.UserPlaylist
 import dev.foulfoxhacks.betteryts.music.device.DeviceMusic
 import dev.foulfoxhacks.betteryts.music.player.PlayerController
 import dev.foulfoxhacks.betteryts.music.together.RoomClient
@@ -49,7 +54,9 @@ sealed interface Route {
     data class ArtistRoute(val id: String, val name: String?) : Route
     data class CollectionRoute(val collection: Collection) : Route
     data class PlaylistRoute(val id: String) : Route
+    data class SmartRoute(val id: String, val name: String) : Route
     data object SettingsRoute : Route
+    data object DiagnosticsRoute : Route
 }
 
 /** A home shelf filled from a search, so Home has music on day one. */
@@ -78,6 +85,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     var queue by mutableStateOf(QueueState())
         private set
     var message by mutableStateOf<String?>(null)
+
+    /** A button for the next snackbar ("Undo"), shown with [message]. */
+    var messageAction by mutableStateOf<Pair<String, () -> Unit>?>(null)
+
+    fun say(text: String, action: Pair<String, () -> Unit>? = null) {
+        messageAction = action
+        message = text
+    }
 
     /** Dialogs: "Add to playlist" for a track, and "New playlist" (optionally pre-filled). */
     var playlistPickerFor by mutableStateOf<Track?>(null)
@@ -296,6 +311,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         suggestions = emptyList()
         suggestJob?.cancel()
         runSearch()
+        // Kept on this phone only, for the recent-searches list.
+        io { library = Core.addSearch(text) }
+    }
+
+    fun removeSearch(q: String) = io { library = Core.removeSearch(q) }
+
+    fun clearSearches() = io {
+        library = Core.clearSearches()
+        message = "Search history cleared"
     }
 
     fun chooseFilter(f: String) {
@@ -412,50 +436,148 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         topUpRadio()
     }
 
-    // ---- Endless radio: YouTube Music's song radio, started on purpose or when the queue runs low ----
-    /** The song the current radio grew from, and where its next page starts. */
-    private var radioSeed: String? = null
-    private var radioNext: String? = null
-    private var radioLoading = false
-    var radioFor by mutableStateOf<String?>(null)
+    // ---- Stations: endless radio from a song, artist or playlist (core/src/stations.rs) ----
+    // The core owns the continuation, repeats, feedback, tuning and recovery; the app only
+    // appends what it hands back to the queue.
+
+    /** The station the queue is riding, if any. */
+    var station by mutableStateOf<Station?>(null)
         private set
 
-    fun startRadio(track: Track) {
-        if (track.isLocal) {
-            message = "Radio comes from YouTube Music, so it needs a YouTube song."
-            return
-        }
-        if (room != null) {
-            message = "Radio isn't available in a room. Add songs to the room queue instead."
-            return
-        }
+    /** Saved and recent stations, for Library and Home. */
+    var stations by mutableStateOf(Stations())
+        private set
+    private var radioLoading = false
+
+    /** What the radio is "songs like", for the player header. */
+    val radioFor: String? get() = station?.label
+
+    fun startRadio(track: Track) = startStation("track", track.id, track.title, track.art, seedTrack = track)
+
+    fun startArtistRadio(artist: Artist) = startStation("artist", artist.id, artist.name, artist.thumbnail)
+
+    fun startCollectionRadio(c: Collection) = startStation("playlist", c.id, c.title, c.thumbnail)
+
+    fun startPlaylistRadio(p: UserPlaylist) = startStation("library", p.id, p.name, p.tracks.firstOrNull { !it.isLocal }?.art, ownTracks = p.tracks)
+
+    /** Plays a saved or recent station again (fresh songs, same tuning and blocked songs). */
+    fun resumeStation(st: Station) {
+        if (!canStartRadio()) return
         io {
-            val page = Core.radio(track.id)
-            radioSeed = track.id
-            radioNext = page.next
-            radioFor = track.title
-            val tracks = listOf(track) + page.tracks.filter { it.id != track.id }
-            applyQueue(Core.queueSet(tracks, 0, false))
-            playCurrent()
-            message = "Radio: songs like " + track.title
+            val own = if (st.kind == "library") library.playlist(st.seedId)?.tracks else null
+            applyStationPage(Core.stationResume(st.id, own), seed = null)
         }
     }
 
-    /** With 3 or fewer songs left, adds more like what's playing. */
+    private fun canStartRadio(): Boolean {
+        if (room != null) {
+            message = "Radio isn't available in a room. Add songs to the room queue instead."
+            return false
+        }
+        return true
+    }
+
+    private fun startStation(kind: String, id: String, title: String, art: String?, seedTrack: Track? = null, ownTracks: List<Track>? = null) {
+        if (seedTrack?.isLocal == true) {
+            message = "Radio comes from YouTube Music, so it needs a YouTube song."
+            return
+        }
+        if (!canStartRadio()) return
+        io {
+            message = "Starting radio…"
+            applyStationPage(Core.stationStart(kind, id, title, art, tracks = ownTracks), seedTrack)
+        }
+    }
+
+    private suspend fun applyStationPage(page: dev.foulfoxhacks.betteryts.music.core.StationPage, seed: Track?) {
+        station = page.station
+        // A song's radio starts with that song.
+        val tracks = if (seed != null) listOf(seed) + page.tracks.filter { it.id != seed.id } else page.tracks
+        if (tracks.isEmpty()) throw CoreException("No radio for this one. Try a different song.")
+        applyQueue(Core.queueSet(tracks, 0, false))
+        playCurrent()
+        message = page.station?.label?.let { "Radio: $it" } ?: "Radio started"
+        refreshStations()
+    }
+
+    fun refreshStations() = io { stations = Core.stations() }
+
+    /** Familiar, balanced or discover: how much of what you already know the station plays. */
+    fun tuneStation(mix: String) = io {
+        stations = Core.stationTune(mix)
+        station = stations.current
+        message = when (mix) {
+            "familiar" -> "More of the artists you know"
+            "discover" -> "More artists you haven't heard"
+            else -> "A balanced mix"
+        }
+    }
+
+    fun saveStation() = io {
+        stations = Core.stationSave()
+        station = stations.current
+        message = "Station saved to your library"
+    }
+
+    fun deleteStation(id: String) = io {
+        stations = Core.stationDelete(id)
+        library = Core.library()
+    }
+
+    /** Never this song on this station again (twice for one artist blocks the artist). */
+    fun notForStation(track: Track, position: Int) {
+        if (station == null) return
+        io {
+            val (result, all) = Core.stationFeedback(track, "notForStation")
+            stations = all
+            station = all.current
+            message = if (result == "artist blocked") "Got it: no more ${track.artist} on this station" else "Got it: not for this station"
+        }
+        removeFromQueue(position)
+    }
+
+    /** The station's next songs grow from this one. */
+    fun moreLikeThis(track: Track) {
+        if (station == null) return
+        io {
+            Core.stationFeedback(track, "moreLikeThis")
+            message = "Coming up: more like ${track.title}"
+        }
+    }
+
+    private fun stationFeedback(track: Track, kind: String) {
+        if (station == null || room != null) return
+        viewModelScope.launch {
+            ready.join()
+            try {
+                Core.stationFeedback(track, kind)
+            } catch (_: CoreException) {
+                // Feedback is best-effort; the station works without it.
+            }
+        }
+    }
+
+    private suspend fun stopStation() {
+        if (station == null) return
+        station = null
+        stations = Core.stationStop()
+    }
+
+    /** With 3 or fewer songs left, adds more from the station (or starts one from what's playing). */
     private fun topUpRadio() {
         val q = queue
         val current = q.current ?: return
         if (!pluginOn("radio") || room != null || radioLoading || q.repeat != Repeat.Off) return
-        // A list of device files ends where it ends, unless it's already riding a radio.
-        if (current.isLocal && radioSeed == null) return
+        // A list of device files ends where it ends, unless it's already riding a station.
+        if (current.isLocal && station == null) return
         if (q.tracks.size - 1 - q.position > 3) return
         radioLoading = true
         viewModelScope.launch {
             try {
-                // Continue the radio we're on; otherwise grow a new one from the current song.
-                val page = if (radioSeed != null && radioNext != null) Core.radio(radioSeed!!, radioNext)
-                else Core.radio(current.id).also { radioSeed = current.id; radioFor = current.title }
-                radioNext = page.next
+                ready.join()
+                // Continue the station we're on; otherwise grow a new one from the current song.
+                val page = if (station != null) Core.stationMore() else Core.stationStart("track", current.id, current.title, current.art)
+                station = page.station
                 val have = queue.tracks.map { it.id }.toSet()
                 val fresh = page.tracks.filter { it.id !in have && !it.live }.distinctBy { it.id }
                 if (fresh.isNotEmpty() && room == null) {
@@ -520,10 +642,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             return
         }
         io {
-            // A new list you chose; when it runs out, radio grows from its last song.
-            radioSeed = null
-            radioNext = null
-            radioFor = null
+            // A new list you chose; when it runs out, a new station grows from its last song.
+            stopStation()
             applyQueue(Core.queueSet(tracks, start, shuffle))
             playCurrent()
         }
@@ -554,6 +674,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             roomSend("next")
             return
         }
+        val skipped = queue.current
+        if (skipped != null && (player?.position ?: 0f) < 30f) stationFeedback(skipped, "skip")
         nextLocal()
     }
 
@@ -658,6 +780,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         return room == null
     }
 
+    /** "Save queue as playlist": asks for a name (the New playlist dialog), pre-filled with the queue. */
+    fun saveQueueAsPlaylist() {
+        val tracks = if (room != null) roomQueue else queue.tracks
+        if (tracks.isEmpty()) {
+            message = "The queue is empty"
+            return
+        }
+        newPlaylistWith = tracks
+    }
+
+    /** Clears the queue; the snackbar offers Undo for a few seconds. */
+    fun clearQueue() {
+        if (!notInRoom("Clearing the queue")) return
+        val before = queue
+        if (before.tracks.isEmpty()) return
+        val at = player?.position ?: 0f
+        io {
+            stopStation()
+            player?.pause()
+            applyQueue(Core.queueClear())
+            val undo: () -> Unit = {
+                io {
+                    applyQueue(Core.queueSet(before.tracks, before.position.coerceAtLeast(0), shuffle = false))
+                    queue.current?.let { player?.load(it.id, at, autoplay = false) }
+                }
+            }
+            say("Queue cleared", "Undo" to undo)
+        }
+    }
+
     fun moveInQueue(from: Int, to: Int) {
         if (notInRoom("Reordering")) io { applyQueue(Core.queueMove(from, to)) }
     }
@@ -681,7 +833,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     override fun onStartedPlaying(id: String) {
         val t = queue.current?.takeIf { it.id == id } ?: return
-        io { library = Core.played(t) }
+        val now = java.time.ZonedDateTime.now()
+        io { library = Core.played(t, now.hour, now.toLocalDate().toEpochDay()) }
+        stationFeedback(t, "played")
+    }
+
+    // ---- Listening time, for local insights: counted from player progress, reported per song ----
+    private var listenId: String? = null
+    private var listenAt = -1f
+    private var listenSeconds = 0f
+
+    private fun trackListening(id: String, seconds: Float) {
+        if (id != listenId) {
+            flushListening()
+            listenId = id
+            listenAt = seconds
+            return
+        }
+        val step = seconds - listenAt
+        listenAt = seconds
+        // Ticks come every half second; anything bigger is a seek, not listening.
+        if (player?.playing == true && step > 0f && step <= 2.5f) listenSeconds += step
+        if (listenSeconds >= 120f) flushListening(keep = true)
+    }
+
+    private fun flushListening(keep: Boolean = false) {
+        val id = listenId ?: return
+        val secs = listenSeconds.toLong()
+        listenSeconds = 0f
+        if (!keep) listenId = null
+        if (secs <= 0) return
+        viewModelScope.launch {
+            ready.join()
+            try {
+                Core.listened(id, secs)
+            } catch (_: CoreException) {
+            }
+        }
     }
 
     override fun onEnded(id: String) {
@@ -771,6 +959,123 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun clearHistory() = io { library = Core.clearHistory() }
+
+    fun removeFromHistory(t: Track) = io {
+        library = Core.removeHistory(t.id)
+        message = "Removed from history"
+    }
+
+    // ---- Pins, batch playlist editing ----
+
+    /** Pins or unpins "playlist:<id>", "artist:<id>", "station:<id>" or "smart:<id>". */
+    fun togglePin(key: String, name: String) = io {
+        val (lib, on) = Core.pin(key)
+        library = lib
+        message = if (on == true) "Pinned $name" else if (lib.pinned.size >= 24) "You can pin up to 24 things" else "Unpinned $name"
+    }
+
+    fun movePlaylistTrack(id: String, from: Int, to: Int) = io { library = Core.movePlaylistTrack(id, from, to) }
+
+    fun removeManyFromPlaylist(id: String, indexes: List<Int>) = io {
+        val (lib, n) = Core.removeManyFromPlaylist(id, indexes)
+        library = lib
+        message = "Removed ${(n as? Number)?.toInt() ?: 0} songs"
+    }
+
+    fun addManyToPlaylist(id: String, tracks: List<Track>) = io {
+        val (lib, n) = Core.addManyToPlaylist(id, tracks)
+        library = lib
+        val added = (n as? Number)?.toInt() ?: 0
+        message = if (added == 0) "Those songs are already there" else "Added $added songs to ${lib.playlist(id)?.name ?: "the playlist"}"
+    }
+
+    fun dedupePlaylist(id: String) = io {
+        val (lib, n) = Core.dedupePlaylist(id)
+        library = lib
+        val removed = (n as? Number)?.toInt() ?: 0
+        message = if (removed == 0) "No repeats found" else "Removed $removed repeat${if (removed == 1) "" else "s"}"
+    }
+
+    fun mergePlaylists(target: String, source: String, deleteSource: Boolean) = io {
+        val (lib, n) = Core.mergePlaylists(target, source, deleteSource)
+        library = lib
+        if (deleteSource) stack.removeAll { it is Route.PlaylistRoute && it.id == source }
+        message = "Merged: ${(n as? Number)?.toInt() ?: 0} new songs in ${lib.playlist(target)?.name ?: "the playlist"}"
+    }
+
+    fun duplicatePlaylist(id: String) = io {
+        val (lib, copy) = Core.duplicatePlaylist(id)
+        library = lib
+        val newId = (copy as? JSONObject)?.optString("id")
+        if (newId.isNullOrEmpty()) message = "You've reached the playlist limit" else {
+            message = "Copied"
+            openUserPlaylist(newId)
+        }
+    }
+
+    // ---- Smart playlists and insights (worked out on the phone) ----
+
+    var smartPlaylists by mutableStateOf<List<SmartPlaylist>>(emptyList())
+        private set
+    val smartTracks = mutableStateMapOf<String, Load<List<Track>>>()
+
+    fun refreshSmart() = io { smartPlaylists = Core.smartList() }
+
+    fun openSmart(sp: SmartPlaylist) {
+        playerExpanded = false
+        stack.add(Route.SmartRoute(sp.id, sp.name))
+        loadSmart(sp.id)
+    }
+
+    fun loadSmart(id: String) = io {
+        smartTracks[id] = Load.Loading
+        smartTracks[id] = try {
+            Load.Ready(Core.smartTracks(id))
+        } catch (e: CoreException) {
+            Load.Failed(e.message ?: "Couldn't build this playlist")
+        }
+    }
+
+    /** For the rule editor: how many songs match, a few of them, and the rule in words. */
+    suspend fun previewSmart(rule: SmartRule): Triple<Int, List<Track>, String> {
+        ready.join()
+        return Core.smartPreview(rule)
+    }
+
+    fun saveSmart(name: String, rule: SmartRule) = io {
+        val (lib, id) = Core.smartSave(name, rule)
+        library = lib
+        if (id == null) message = "You can have up to 30 smart playlists" else {
+            message = "Smart playlist saved"
+            smartPlaylists = Core.smartList()
+        }
+    }
+
+    fun deleteSmart(id: String) = io {
+        library = Core.smartDelete(id)
+        smartPlaylists = Core.smartList()
+        stack.removeAll { it is Route.SmartRoute && it.id == id }
+        message = "Smart playlist deleted"
+    }
+
+    var insights by mutableStateOf<Load<dev.foulfoxhacks.betteryts.music.core.Insights>?>(null)
+        private set
+
+    fun loadInsights() = io {
+        insights = Load.Loading
+        insights = try {
+            Load.Ready(Core.insights(java.time.LocalDate.now().toEpochDay()))
+        } catch (e: CoreException) {
+            Load.Failed(e.message ?: "Couldn't work out your stats")
+        }
+    }
+
+    fun clearListeningStats() = io {
+        library = Core.clearStats()
+        message = "Listening stats cleared"
+        loadInsights()
+        smartPlaylists = Core.smartList()
+    }
 
     // ---------------------------------------------------------------------------------------
     // Settings, theme and plugins
@@ -881,7 +1186,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     fun pluginOn(id: String) = settings.on(id) && !(id == "background" && dev.foulfoxhacks.betteryts.music.BuildConfig.PLAY_STORE)
 
     /** Library › Send to a VRChat world. */
-    data class WorldSend(val prefill: String = "", val checkedCode: String? = null, val service: String = "youtube", val busy: Boolean = false, val error: String? = null, val sent: String? = null)
+    data class WorldSend(
+        val prefill: String = "",
+        val checkedCode: String? = null,
+        val service: String = "youtube",
+        val capabilities: List<String> = emptyList(),
+        val busy: Boolean = false,
+        val error: String? = null,
+        val sent: String? = null,
+        val preview: dev.foulfoxhacks.betteryts.music.core.WorldPreview? = null,
+    )
 
     var worldSend by mutableStateOf(WorldSend())
         private set
@@ -902,19 +1216,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         ready.join()
         worldSend = worldSend.copy(busy = true, error = null, prefill = code)
         worldSend = try {
-            val (c, service) = Core.inworldCheck(code)
-            worldSend.copy(busy = false, checkedCode = c, service = service, prefill = c)
+            val w = Core.inworldCheck(code)
+            worldSend.copy(busy = false, checkedCode = w.code, service = w.service, capabilities = w.capabilities, prefill = w.code)
         } catch (e: CoreException) {
             worldSend.copy(busy = false, checkedCode = null, error = e.message)
         }
     }
 
-    fun sendToWorld(playlistIds: List<String>, liked: Boolean, save: Boolean) = viewModelScope.launch {
+    private var worldPreviewJob: Job? = null
+
+    /** Recounts what a send would contain whenever the selection changes. */
+    fun previewWorldSend(playlistIds: List<String>, liked: Boolean, queue: Boolean) {
+        worldPreviewJob?.cancel()
+        worldPreviewJob = viewModelScope.launch {
+            ready.join()
+            delay(150)
+            worldSend = try {
+                worldSend.copy(preview = Core.inworldPreview(playlistIds, liked, queue))
+            } catch (e: CoreException) {
+                worldSend.copy(preview = null, error = e.message)
+            }
+        }
+    }
+
+    fun forgetWorldSends() = io {
+        library = Core.inworldForget()
+        message = "Send history cleared"
+    }
+
+    fun sendToWorld(playlistIds: List<String>, liked: Boolean, save: Boolean, queue: Boolean = false) = viewModelScope.launch {
         ready.join()
         val code = worldSend.checkedCode ?: return@launch
         worldSend = worldSend.copy(busy = true, error = null)
         worldSend = try {
-            val (lists, songs) = Core.inworldSend(code, worldSend.service, playlistIds, liked, save)
+            val (lists, songs, lib) = Core.inworldSend(code, worldSend.service, playlistIds, liked, save, queue)
+            lib?.let { library = it }
             val kept = if (save) " Saved for your next visit for up to 30 days; Unlink in the world deletes it." else " Just this visit: nothing is kept once the code expires."
             worldSend.copy(busy = false, sent = "Sent $lists playlist${if (lists == 1) "" else "s"} ($songs songs). Look at the world: they show up within a few seconds.$kept")
         } catch (e: CoreException) {
@@ -933,17 +1269,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         message = "Backup saved. It also imports on the website (Settings › Backup)."
     }
 
+    /** A backup file that has been read and checked, waiting for the user to confirm. */
+    data class PendingBackup(val text: String, val preview: dev.foulfoxhacks.betteryts.music.core.BackupPreview, val replace: Boolean)
+
+    var pendingBackup by mutableStateOf<PendingBackup?>(null)
+        private set
+
+    /** Reads the file and shows what importing it would change; nothing changes until [confirmBackup]. */
     fun importBackup(uri: android.net.Uri) = io {
         val app = getApplication<Application>()
         val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             app.contentResolver.openInputStream(uri)?.use { s -> s.readBytes().takeIf { it.size <= 5_000_000 }?.toString(Charsets.UTF_8) }
         } ?: throw CoreException("That file is too big to be a BetterYTS backup")
-        val (sum, newSettings) = Core.backupImport(text)
+        pendingBackup = PendingBackup(text, Core.backupPreview(text, replace = false), replace = false)
+    }
+
+    /** Switches the pending import between merge and replace (and shows what each would do). */
+    fun setBackupReplace(replace: Boolean) {
+        val p = pendingBackup ?: return
+        io { pendingBackup = p.copy(preview = Core.backupPreview(p.text, replace), replace = replace) }
+    }
+
+    fun cancelBackup() {
+        pendingBackup = null
+    }
+
+    fun confirmBackup() {
+        val p = pendingBackup ?: return
+        pendingBackup = null
+        applyBackup(p.text, p.replace)
+    }
+
+    private fun applyBackup(text: String, replace: Boolean) = io {
+        val (sum, newSettings) = Core.backupImport(text, replace)
         settings = newSettings
         applyPlugins()
         library = Core.library()
         refreshFeed()
-        val parts = listOf("favoritesAdded" to "liked songs", "playlistsAdded" to "playlists", "playlistsUpdated" to "playlists updated", "artistsAdded" to "artists", "historyAdded" to "history", "pluginsInstalled" to "plugins")
+        smartPlaylists = Core.smartList()
+        val parts = listOf("favoritesAdded" to "liked songs", "playlistsAdded" to "playlists", "playlistsUpdated" to "playlists updated", "artistsAdded" to "artists", "historyAdded" to "history", "pluginsInstalled" to "plugins", "smartAdded" to "smart playlists")
             .mapNotNull { (k, label) -> sum.optInt(k).takeIf { it > 0 }?.let { "$it $label" } }
         message = if (parts.isEmpty()) "Backup checked: nothing new to add" else "Imported " + parts.joinToString(", ")
     }
@@ -993,6 +1357,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         // Remember where playback stopped. Skip finished songs and the first moments of a cue,
         // which report 0 before YouTube knows the real position.
         if (room != null) roomDriftTick(id, seconds)
+        trackListening(id, seconds)
         if (settings.activeCommunity.isNotEmpty()) sendNowPlaying(force = false)
         if (room == null && id == endedId && seconds < 3f) endedId = null
         if (room == null && resumeEnabled && id != endedId && seconds >= 0.5f && duration > 5f && seconds < duration - 3f) {
@@ -1560,6 +1925,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
         val target = r.positionOf(s)
         val drift = target - seconds // > 0: we are behind
+        roomDrift = drift
         val off = kotlin.math.abs(drift)
         if (off > 2f) {
             endNudge()
@@ -1575,11 +1941,73 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
     }
 
+    /** Last measured difference from the room's position (seconds; > 0 means behind). */
+    var roomDrift by mutableFloatStateOf(0f)
+        private set
+
+    // ---------------------------------------------------------------------------------------
+    // Diagnostics (Settings › Diagnostics): what the player and the network did, shareable
+    // without tokens, room codes, searches or what you listened to.
+    // ---------------------------------------------------------------------------------------
+
+    var networkDiagnostics by mutableStateOf<dev.foulfoxhacks.betteryts.music.core.NetworkDiagnostics?>(null)
+        private set
+
+    val playerForDiagnostics: PlayerController? get() = player
+
+    fun openDiagnostics() {
+        playerExpanded = false
+        stack.add(Route.DiagnosticsRoute)
+        loadDiagnostics()
+    }
+
+    fun loadDiagnostics() = io { networkDiagnostics = Core.diagnostics() }
+
+    fun clearDiagnostics() = io {
+        Core.clearDiagnostics()
+        networkDiagnostics = Core.diagnostics()
+    }
+
+    /** A plain-text report for a bug report. Leaves out song IDs, searches, tokens and room codes. */
+    fun diagnosticsReport(): String {
+        val app = getApplication<Application>()
+        val p = player
+        val n = networkDiagnostics
+        val version = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() ?: "?"
+        val webview = runCatching { androidx.webkit.WebViewCompat.getCurrentWebViewPackage(app)?.versionName }.getOrNull() ?: "unknown"
+        return buildString {
+            appendLine("BetterYTS Music diagnostics")
+            appendLine("App ${version} (${if (dev.foulfoxhacks.betteryts.music.BuildConfig.PLAY_STORE) "play" else "sideload"}), core ${n?.coreVersion ?: "?"}, Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}), WebView $webview")
+            if (p != null) {
+                val m = p.machine
+                appendLine("Player: ${m.state}, ${if (p.currentId == null) "nothing loaded" else if (DeviceMusic.isLocal(p.currentId)) "device file" else "YouTube embed"}, speed ${p.speed}x, PiP ${inPip}")
+                appendLine("Time to ready: ${m.lastTimeToReadyMs?.let { "$it ms" } ?: "n/a"} · rebuffers: ${m.rebufferCount} (${m.rebufferMs} ms) · last error: ${m.lastError ?: "none"}")
+                appendLine("Background play: ${pluginOn("background")} · resume: $resumeEnabled · queue: ${queue.tracks.size} songs${if (station != null) " · on a station (${station?.mix})" else ""}")
+                if (room != null) appendLine("Room: connected=${roomStatus.isEmpty()} host=$roomIsHost drift=${"%.2f".format(roomDrift)}s")
+                appendLine("Recent player changes (newest first):")
+                val now = android.os.SystemClock.elapsedRealtime()
+                m.transitions.take(25).forEach { t -> appendLine("  -${(now - t.at) / 1000}s ${t.from} → ${t.to} (${t.reason})${if (t.expected) "" else " [unexpected]"}") }
+            }
+            if (n != null) {
+                appendLine("Network: ${n.requests} requests, ${n.failures} failed, ${n.cacheHits} from cache, ${n.retries} retries, median ${n.medianMs} ms, slowest ${n.maxMs} ms")
+                n.lastError?.let { appendLine("Last network error: $it") }
+                n.recent.take(25).forEach { r -> appendLine("  ${r.method} ${r.route} ${if (r.cached) "cache" else "${r.status} ${r.ms}ms"}${if (r.retries > 0) " retries=${r.retries}" else ""}${r.error?.let { " $it" } ?: ""}${r.requestId?.let { " id=$it" } ?: ""}") }
+            }
+        }
+    }
+
     // Last, so every property above is initialised first (Kotlin runs initialisers in order).
     init {
         loadShelves()
         viewModelScope.launch {
             ready.join()
+            try {
+                stations = Core.stations()
+                // The restored queue was riding a station: keep riding it.
+                if (queue.current != null) station = stations.current
+                smartPlaylists = Core.smartList()
+            } catch (_: CoreException) {
+            }
             updater.check(auto = true)
         }
     }

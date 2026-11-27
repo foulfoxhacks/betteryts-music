@@ -11,15 +11,19 @@
 
 pub mod api;
 pub mod bridge;
+pub mod diag;
+pub mod error;
 pub mod google;
 pub mod library;
 pub mod links;
 pub mod model;
 pub mod music;
+pub mod smart;
 pub mod plugins;
 pub mod queue;
 pub mod radio;
 pub mod spotify;
+pub mod stations;
 pub mod qr;
 pub mod backup;
 pub mod inworld;

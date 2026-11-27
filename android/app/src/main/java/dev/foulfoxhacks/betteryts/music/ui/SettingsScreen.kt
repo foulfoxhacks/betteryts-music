@@ -116,6 +116,21 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             item { SectionHeader("YouTube account") }
             item { GoogleCard(vm) }
 
+            item { SectionHeader("Help") }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().clickable { vm.openDiagnostics() }.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(AppIcons.Diagnostics, null, tint = Brand.Gold)
+                    Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                        Text("Diagnostics", color = Brand.Paper, fontWeight = FontWeight.Bold)
+                        Text("Player and network details for a bug report, without personal data.", color = Brand.Muted, fontSize = 13.sp)
+                    }
+                    Icon(AppIcons.Chevron, null, tint = Brand.Muted)
+                }
+            }
+
             item { SectionHeader("About") }
             item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -220,7 +235,7 @@ private fun BackupCard(vm: AppViewModel) {
     val open = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importBackup) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            "Liked songs, playlists, followed artists, history, hidden lists and community plugins in one file. It works both ways with the website (yts.foulfoxhacks.dev › Settings › Backup). Importing adds to what's here; it never deletes.",
+            "Liked songs, playlists, followed artists, history, hidden lists, smart playlists and community plugins in one file. It works both ways with the website (yts.foulfoxhacks.dev › Settings › Backup). Importing shows what would change first; it adds to what's here unless you choose Replace. Listening stats and search history stay on this phone.",
             color = Brand.Muted,
             fontSize = 13.sp,
         )

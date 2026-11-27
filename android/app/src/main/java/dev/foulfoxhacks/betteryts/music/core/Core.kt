@@ -4,7 +4,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-class CoreException(message: String) : Exception(message)
+/**
+ * A core error. [code] is stable and machine-readable (core/src/error.rs): NETWORK, TIMEOUT,
+ * RATE_LIMITED, UPSTREAM, NOT_FOUND, REJECTED, BAD_RESPONSE, TOO_LARGE, INVALID_ARGUMENT, ERROR.
+ */
+class CoreException(
+    message: String,
+    val code: String = "ERROR",
+    val retryable: Boolean = false,
+    val retryAfterSeconds: Long? = null,
+) : Exception(message) {
+    val offline get() = code == "NETWORK" || code == "TIMEOUT"
+}
 
 /**
  * The Rust core (libbetteryts_core.so). One JNI call, JSON in and out; see core/src/bridge.rs
@@ -20,7 +31,13 @@ object Core {
 
     private suspend fun request(method: String, args: JSONObject = JSONObject()): Any? = withContext(Dispatchers.IO) {
         val reply = JSONObject(call(method, args.toString()))
-        if (reply.optBoolean("ok")) reply.opt("data") else throw CoreException(reply.optString("error", "Something went wrong"))
+        if (reply.optBoolean("ok")) reply.opt("data")
+        else throw CoreException(
+            reply.optString("error", "Something went wrong"),
+            reply.optString("code", "ERROR"),
+            reply.optBoolean("retryable"),
+            if (reply.has("retryAfter")) reply.optLong("retryAfter") else null,
+        )
     }
 
     private suspend fun obj(method: String, args: JSONObject = JSONObject()): JSONObject =
@@ -86,7 +103,79 @@ object Core {
     }
 
     suspend fun toggleFavorite(track: Track) = libraryOp("favorite", args("track" to track.toJson()))
-    suspend fun played(track: Track) = libraryOp("played", args("track" to track.toJson())).first
+    /** Counts a play. [hour] and [day] are the phone's local hour and epoch day, for insights. */
+    suspend fun played(track: Track, hour: Int, day: Long) = libraryOp("played", args("track" to track.toJson(), "hour" to hour, "day" to day)).first
+
+    /** Time actually listened to a song, reported when it stops. */
+    suspend fun listened(id: String, seconds: Long) {
+        request("library.listened", args("id" to id, "seconds" to seconds))
+    }
+
+    suspend fun removeHistory(id: String) = libraryOp("removeHistory", args("id" to id)).first
+    suspend fun clearStats() = libraryOp("clearStats").first
+    suspend fun addSearch(query: String) = libraryOp("addSearch", args("query" to query)).first
+    suspend fun removeSearch(query: String) = libraryOp("removeSearch", args("query" to query)).first
+    suspend fun clearSearches() = libraryOp("clearSearches").first
+
+    /** Pins or unpins "playlist:<id>", "artist:<id>", "station:<id>" or "smart:<id>"; returns (library, pinned now). */
+    suspend fun pin(key: String) = libraryOp("pin", args("key" to key))
+    suspend fun movePlaylistTrack(id: String, from: Int, to: Int) = libraryOp("movePlaylistTrack", args("id" to id, "from" to from, "to" to to)).first
+    suspend fun removeManyFromPlaylist(id: String, indexes: List<Int>) = libraryOp("removeManyFromPlaylist", args("id" to id, "indexes" to intArray(indexes)))
+    suspend fun addManyToPlaylist(id: String, tracks: List<Track>) = libraryOp("addManyToPlaylist", args("id" to id, "tracks" to Track.array(tracks)))
+    suspend fun dedupePlaylist(id: String) = libraryOp("dedupePlaylist", args("id" to id))
+    suspend fun mergePlaylists(target: String, source: String, deleteSource: Boolean) = libraryOp("mergePlaylists", args("target" to target, "source" to source, "deleteSource" to deleteSource))
+    suspend fun duplicatePlaylist(id: String) = libraryOp("duplicatePlaylist", args("id" to id))
+
+    // ---- smart playlists and insights (core/src/smart.rs) ----
+
+    suspend fun smartList(): List<SmartPlaylist> = (request("smart.list") as? org.json.JSONArray).mapObjects(SmartPlaylist::from)
+
+    suspend fun smartTracks(id: String): List<Track> = Track.list(obj("smart.tracks", args("id" to id)).optJSONArray("tracks"))
+
+    /** (how many songs match, the first few, the rule in words). */
+    suspend fun smartPreview(rule: SmartRule): Triple<Int, List<Track>, String> {
+        val o = obj("smart.preview", args("rule" to rule.toJson()))
+        return Triple(o.optInt("count"), Track.list(o.optJSONArray("tracks")), o.str("description") ?: "")
+    }
+
+    suspend fun smartSave(name: String, rule: SmartRule): Pair<Library, String?> {
+        val o = obj("smart.save", args("name" to name, "rule" to rule.toJson()))
+        return Library.from(o.optJSONObject("library") ?: JSONObject()) to o.optJSONObject("result")?.str("id")
+    }
+
+    suspend fun smartDelete(id: String): Library = Library.from(obj("smart.delete", args("id" to id)).optJSONObject("library") ?: JSONObject())
+
+    suspend fun insights(today: Long) = Insights.from(obj("insights", args("today" to today)))
+
+    // ---- stations (core/src/stations.rs) ----
+
+    private fun stationPage(o: JSONObject) = StationPage(Station.from(o.optJSONObject("station")), Track.list(o.optJSONArray("tracks")), o.optBoolean("recovered"))
+
+    /** Starts a station from a song, artist, YouTube playlist or one of your playlists ([tracks]). */
+    suspend fun stationStart(kind: String, id: String, title: String, art: String?, mix: String? = null, tracks: List<Track>? = null) =
+        stationPage(obj("station.start", args("kind" to kind, "id" to id, "title" to title, "art" to art, "mix" to mix, "tracks" to tracks?.let { Track.array(it) })))
+
+    suspend fun stationResume(id: String, tracks: List<Track>? = null) = stationPage(obj("station.resume", args("id" to id, "tracks" to tracks?.let { Track.array(it) })))
+    suspend fun stationMore() = stationPage(obj("station.more"))
+
+    /** [kind]: skip, played, notForStation, moreLikeThis. */
+    suspend fun stationFeedback(track: Track, kind: String): Pair<String?, Stations> {
+        val o = obj("station.feedback", args("track" to track.toJson(), "kind" to kind))
+        return o.str("result") to Stations.from(o.optJSONObject("stations"))
+    }
+
+    suspend fun stationTune(mix: String) = Stations.from(obj("station.tune", args("mix" to mix)))
+    suspend fun stationSave() = Stations.from(obj("station.save"))
+    suspend fun stationDelete(id: String) = Stations.from(obj("station.delete", args("id" to id)))
+    suspend fun stationStop() = Stations.from(obj("station.stop"))
+    suspend fun stations() = Stations.from(obj("stations.list"))
+
+    // ---- diagnostics (core/src/diag.rs) ----
+
+    suspend fun diagnostics() = NetworkDiagnostics.from(obj("diagnostics.get"))
+    suspend fun clearDiagnostics() {
+        request("diagnostics.clear")
+    }
     suspend fun clearHistory() = libraryOp("clearHistory").first
     suspend fun createPlaylist(name: String, tracks: List<Track>) = libraryOp("createPlaylist", args("name" to name, "tracks" to Track.array(tracks)))
     suspend fun renamePlaylist(id: String, name: String) = libraryOp("renamePlaylist", args("id" to id, "name" to name))
@@ -224,23 +313,35 @@ object Core {
     /** The library and settings as a backup file (same format as the website's Settings › Backup). */
     suspend fun backupExport(appVersion: String): String = obj("backup.export", args("appVersion" to appVersion)).optString("text")
 
-    /** Merges a backup (from the site or the app); returns a summary and the new settings. */
-    suspend fun backupImport(text: String): Pair<JSONObject, Settings> {
-        val o = obj("backup.import", args("text" to text))
+    /** Reads a backup and says what importing it would change, without changing anything. */
+    suspend fun backupPreview(text: String, replace: Boolean) = BackupPreview.from(obj("backup.preview", args("text" to text, "mode" to if (replace) "replace" else "merge")))
+
+    /** Imports a backup (from the site or the app): merges, or replaces the library; returns a summary and the new settings. */
+    suspend fun backupImport(text: String, replace: Boolean = false): Pair<JSONObject, Settings> {
+        val o = obj("backup.import", args("text" to text, "mode" to if (replace) "replace" else "merge"))
         return (o.optJSONObject("summary") ?: JSONObject()) to settingsFrom(o.optJSONObject("settings") ?: JSONObject())
     }
 
-    /** Checks an activation code shown in a VRChat world: (canonical code, "youtube" | "spotify"). */
-    suspend fun inworldCheck(code: String): Pair<String, String> {
+    data class WorldCode(val code: String, val service: String, val capabilities: List<String>, val expiresIn: Long?)
+
+    /** Checks an activation code shown in a VRChat world. */
+    suspend fun inworldCheck(code: String): WorldCode {
         val o = obj("inworld.check", args("code" to code))
-        return (o.str("code") ?: code) to (o.str("service") ?: "youtube")
+        val caps = o.optJSONArray("capabilities")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
+        return WorldCode(o.str("code") ?: code, o.str("service") ?: "youtube", caps, if (o.has("expiresIn")) o.optLong("expiresIn") else null)
     }
 
-    /** Sends library playlists (by ID, plus liked songs) to that world: (playlists, songs) sent. */
-    suspend fun inworldSend(code: String, service: String, playlistIds: List<String>, liked: Boolean, save: Boolean): Pair<Int, Int> {
-        val o = obj("inworld.send", args("code" to code, "service" to service, "playlistIds" to org.json.JSONArray(playlistIds), "liked" to liked, "save" to save))
-        return o.optInt("playlists") to o.optInt("tracks")
+    /** What a send would contain (counts, songs left out, size), before anything is sent. */
+    suspend fun inworldPreview(playlistIds: List<String>, liked: Boolean, queue: Boolean) =
+        WorldPreview.from(obj("inworld.preview", args("playlistIds" to org.json.JSONArray(playlistIds), "liked" to liked, "queue" to queue)))
+
+    /** Sends library playlists (by ID, plus liked songs and the queue) to that world: (playlists, songs) sent, and the library with the send remembered. */
+    suspend fun inworldSend(code: String, service: String, playlistIds: List<String>, liked: Boolean, save: Boolean, queue: Boolean = false): Triple<Int, Int, Library?> {
+        val o = obj("inworld.send", args("code" to code, "service" to service, "playlistIds" to org.json.JSONArray(playlistIds), "liked" to liked, "save" to save, "queue" to queue))
+        return Triple(o.optInt("playlists"), o.optInt("tracks"), o.optJSONObject("library")?.let(Library::from))
     }
+
+    suspend fun inworldForget(): Library = Library.from(obj("inworld.forget").optJSONObject("library") ?: JSONObject())
 
     /** A QR code as rows of "0"/"1" (core/src/qr.rs, same encoder as the website). */
     suspend fun qr(text: String): List<String> {

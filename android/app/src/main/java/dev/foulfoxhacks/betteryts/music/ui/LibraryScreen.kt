@@ -46,7 +46,7 @@ import dev.foulfoxhacks.betteryts.music.device.DeviceMusic
 import dev.foulfoxhacks.betteryts.music.ui.theme.Brand
 
 /** YouTube Music's library chips, plus History (theirs hides it in the account menu). */
-private val TABS = listOf("all" to "All", "songs" to "Songs", "playlists" to "Playlists", "artists" to "Artists", "device" to "On this phone", "history" to "History")
+private val TABS = listOf("all" to "All", "songs" to "Songs", "playlists" to "Playlists", "artists" to "Artists", "device" to "On this phone", "history" to "History", "stats" to "Insights")
 
 @Composable
 fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
@@ -80,7 +80,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                 items(TABS) { (key, label) -> Chip(label, tab == key) { vm.libraryTab = key } }
             }
         }
-        if (!lib.isEmpty || tab == "device") {
+        if ((!lib.isEmpty || tab == "device") && tab != "stats") {
             item {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
@@ -154,15 +154,25 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                     item { EmptyNote(if (q.isEmpty()) "Nothing played yet" else "No matches", "Songs you play show up here.") }
                 } else {
                     if (q.isEmpty()) item { BrandButton("Clear history", { vm.clearHistory() }, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), icon = AppIcons.Delete) }
-                    itemsIndexed(history, key = { _, t -> "h-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(history, i) }) }
+                    itemsIndexed(history, key = { _, t -> "h-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(history, i) }, extraActions = listOf<Pair<String, () -> Unit>>("Remove from history" to { vm.removeFromHistory(t); Unit })) }
                 }
             }
+
+            "stats" -> insightsView(vm)
 
             else -> {
                 if (artists.isEmpty()) {
                     item { EmptyNote(if (q.isEmpty()) "Not following anyone" else "No matches", "Open an artist and tap Follow. Their new songs show up on Home.") }
                 }
-                items(artists, key = { "a-" + it.id }) { a -> ArtistRow(a) { vm.openArtist(a.id, a.name) } }
+                items(artists, key = { "a-" + it.id }) { a ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { ArtistRow(a) { vm.openArtist(a.id, a.name) } }
+                        val key = "artist:" + a.id
+                        androidx.compose.material3.IconButton(onClick = { vm.togglePin(key, a.name) }) {
+                            Icon(AppIcons.Pin, if (lib.isPinned(key)) "Unpin ${a.name}" else "Pin ${a.name}", tint = if (lib.isPinned(key)) Brand.Gold else Brand.Muted.copy(alpha = 0.5f))
+                        }
+                    }
+                }
             }
         }
         item { Spacer(Modifier.height(8.dp)); SpotifyCard(vm) }
@@ -173,6 +183,11 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
 
 /** "All": recently played grid, then Liked songs and your playlists as one list, YouTube Music style. */
 private fun LazyListScope.allView(vm: AppViewModel, songs: List<Track>, playlists: List<UserPlaylist>, history: List<Track>, unfiltered: Boolean) {
+    if (unfiltered) {
+        pinnedShelf(vm)
+        stationsShelf(vm)
+        smartShelf(vm)
+    }
     val recent = history.take(6)
     if (recent.isNotEmpty()) {
         item { SectionHeader("Recently played", Modifier.padding(top = 4.dp), action = if (unfiltered) "See all" else null) { vm.libraryTab = "history" } }
@@ -222,8 +237,9 @@ private fun PlaylistRow(vm: AppViewModel, p: UserPlaylist) {
         RemoteImage(p.tracks.firstOrNull()?.art, Modifier.size(64.dp))
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(p.name, color = Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull("Playlist", if (p.fromYouTube) "From YouTube" else null, "${p.tracks.size} song${if (p.tracks.size == 1) "" else "s"}").joinToString(" · "), color = Brand.Muted, fontSize = 13.sp)
+            Text(listOfNotNull("Playlist", p.sourceLabel, "${p.tracks.size} song${if (p.tracks.size == 1) "" else "s"}").joinToString(" · "), color = Brand.Muted, fontSize = 13.sp)
         }
+        if (vm.library.isPinned("playlist:" + p.id)) Icon(AppIcons.Pin, "Pinned", Modifier.size(18.dp), tint = Brand.Gold)
     }
 }
 
