@@ -92,6 +92,36 @@ installed on the same device also has to be uninstalled). If `keystore.propertie
 
 Tests for the core: `cd core; cargo test` (plus `cargo test -- --ignored` for live-API checks).
 
+### Automated signed releases
+
+The `.github/workflows/android-release.yml` workflow builds and publishes a signed sideload APK
+and a Play Store AAB when a `v*` tag is pushed (or when run manually). It requires these GitHub
+Actions repository secrets:
+
+- `BTM_RELEASE_KEYSTORE_BASE64`: Base64-encoded contents of the release `.jks` keystore.
+- `BTM_RELEASE_STORE_PASSWORD`: keystore password.
+- `BTM_RELEASE_KEY_ALIAS`: signing key alias (normally `betteryts`).
+- `BTM_RELEASE_KEY_PASSWORD`: key password.
+
+Create the signing key once on a trusted computer from the `android` directory using JDK
+`keytool` (choose a strong password and keep a secure offline backup):
+
+```powershell
+keytool -genkeypair -v -keystore release-keystore.jks -alias betteryts -keyalg RSA -keysize 4096 -validity 10000
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("release-keystore.jks")) | Set-Clipboard
+```
+
+Add the four values under **Repository → Settings → Secrets and variables → Actions → New
+repository secret**. Paste the clipboard contents into `BTM_RELEASE_KEYSTORE_BASE64`; do not
+commit the keystore, its properties file, or passwords. Store the original `.jks` and passwords
+in a separate secure backup. The release workflow writes a temporary keystore and properties
+file only on its isolated runner, verifies the APK signature, then attaches the APK, AAB, and
+SHA-256 checksums to the GitHub Release.
+
+To publish, push a version tag such as `v0.9.4` after updating the app's `versionCode` and
+`versionName`. The workflow does not change version numbers automatically. Keep using this
+same keystore for every update to preserve Android install/update compatibility.
+
 ## Optional: Connect with Google
 
 Library → **Connect with Google** imports YouTube / YouTube Music playlists, liked songs and
