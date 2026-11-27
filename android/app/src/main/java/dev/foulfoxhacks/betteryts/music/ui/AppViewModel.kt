@@ -70,8 +70,11 @@ sealed interface Load<out T> {
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.Listener {
+    /** Look and feel choices that only the app needs: accent, album colours, start tab, autoplay. */
+    private val look = app.getSharedPreferences("look", android.content.Context.MODE_PRIVATE)
+
     // ---- navigation ----
-    var tab by mutableStateOf(Tab.Home)
+    var tab by mutableStateOf(runCatching { Tab.valueOf(look.getString("startTab", "Home") ?: "Home") }.getOrDefault(Tab.Home).takeIf { it != Tab.Search } ?: Tab.Home)
         private set
     val stack = mutableStateListOf<Route>()
     var playerExpanded by mutableStateOf(false)
@@ -383,6 +386,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         p.listener = this
         speed = playPrefs.getFloat("speed", 1f).takeIf { it in 0.5f..2f } ?: 1f
         p.applySpeed(speed)
+        p.setVolumePercent(curve(volumeSlider))
+        p.skipSilence = skipSilence
+        p.onFxReady = { fx -> applyFx(fx) }
+        p.fx?.let(::applyFx)
         // The activity was recreated with something in the queue: cue it, don't blast it.
         queue.current?.let { p.load(it.id, resumePosition(it), autoplay = false) }
     }
@@ -567,7 +574,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private fun topUpRadio() {
         val q = queue
         val current = q.current ?: return
-        if (!pluginOn("radio") || room != null || radioLoading || q.repeat != Repeat.Off) return
+        if (!pluginOn("radio") || !autoplay || room != null || radioLoading || q.repeat != Repeat.Off) return
         // A list of device files ends where it ends, unless it's already riding a station.
         if (current.isLocal && station == null) return
         if (q.tracks.size - 1 - q.position > 3) return
@@ -621,6 +628,223 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         resumeEnabled = on
         playPrefs.edit().putBoolean("resume", on).apply()
         message = if (on) "Songs will resume where you left off" else "Songs always start from the beginning"
+    }
+
+    // ---- Sound: precise and exponential volume, skip silence, equalizer, compressor ----
+
+    /** The volume slider's position (0–1). With exponential volume on, the player gets slider³. */
+    var volumeSlider by mutableFloatStateOf(playPrefs.getFloat("volume", 1f).coerceIn(0f, 1f))
+        private set
+    var exponentialVolume by mutableStateOf(playPrefs.getBoolean("expVolume", true))
+        private set
+    var skipSilence by mutableStateOf(playPrefs.getBoolean("skipSilence", false))
+        private set
+    var skipDisliked by mutableStateOf(playPrefs.getBoolean("skipDisliked", true))
+        private set
+    var eqOn by mutableStateOf(playPrefs.getBoolean("eqOn", false))
+        private set
+    var eqPreset by mutableStateOf(playPrefs.getInt("eqPreset", -1))
+        private set
+    var compressor by mutableStateOf(playPrefs.getBoolean("compressor", false))
+        private set
+
+    /** Equalizer gains in millibels, by band (empty = flat). */
+    private var eqLevels: List<Int> = playPrefs.getString("eqLevels", "")!!.split(',').mapNotNull { it.toIntOrNull() }
+
+    private fun curve(slider: Float) = if (exponentialVolume) slider * slider * slider * 100f else slider * 100f
+
+    /** The volume the player actually uses, in percent (shown next to the slider). */
+    val volumePercent: Float get() = curve(volumeSlider)
+
+    fun setVolume(slider: Float) {
+        volumeSlider = slider.coerceIn(0f, 1f)
+        player?.setVolumePercent(curve(volumeSlider))
+        playPrefs.edit().putFloat("volume", volumeSlider).apply()
+    }
+
+    fun updateExponentialVolume(on: Boolean) {
+        exponentialVolume = on
+        playPrefs.edit().putBoolean("expVolume", on).apply()
+        player?.setVolumePercent(curve(volumeSlider))
+    }
+
+    fun updateSkipSilence(on: Boolean) {
+        skipSilence = on
+        player?.skipSilence = on
+        playPrefs.edit().putBoolean("skipSilence", on).apply()
+    }
+
+    fun updateSkipDisliked(on: Boolean) {
+        skipDisliked = on
+        playPrefs.edit().putBoolean("skipDisliked", on).apply()
+    }
+
+    fun setEq(on: Boolean) {
+        eqOn = on
+        playPrefs.edit().putBoolean("eqOn", on).apply()
+        player?.fx?.setEnabled(on)
+    }
+
+    fun setEqBand(band: Int, millibels: Int) {
+        val fx = player?.fx ?: return
+        val levels = (0 until fx.bands).map { if (it == band) millibels else eqLevels.getOrElse(it) { fx.level(it) } }
+        eqLevels = levels
+        eqPreset = -1
+        fx.setLevel(band, millibels)
+        playPrefs.edit().putString("eqLevels", levels.joinToString(",")).putInt("eqPreset", -1).apply()
+    }
+
+    fun useEqPreset(i: Int) {
+        val fx = player?.fx ?: return
+        fx.usePreset(i)
+        eqPreset = i
+        eqLevels = (0 until fx.bands).map { fx.level(it) }
+        playPrefs.edit().putInt("eqPreset", i).putString("eqLevels", eqLevels.joinToString(",")).apply()
+    }
+
+    fun updateCompressor(on: Boolean) {
+        compressor = on
+        playPrefs.edit().putBoolean("compressor", on).apply()
+        player?.fx?.updateCompressor(on)
+    }
+
+    private fun applyFx(fx: dev.foulfoxhacks.betteryts.music.player.AudioFx) {
+        if (eqPreset >= 0) fx.usePreset(eqPreset) else eqLevels.forEachIndexed { b, mb -> if (b < fx.bands) fx.setLevel(b, mb) }
+        fx.setEnabled(eqOn)
+        fx.updateCompressor(compressor)
+    }
+
+    /** Android's own output picker (speaker, Bluetooth, cast…), where the system offers one. */
+    fun openOutputSwitcher() {
+        val app = getApplication<Application>()
+        val ok = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                android.media.MediaRouter2.getInstance(app).showSystemOutputSwitcher()
+            } else {
+                val i = Intent("com.android.systemui.action.LAUNCH_MEDIA_OUTPUT_DIALOG")
+                    .setPackage("com.android.systemui")
+                    .putExtra("package_name", app.packageName)
+                app.sendBroadcast(i)
+                true
+            }
+        }.getOrDefault(false)
+        if (!ok) {
+            runCatching { app.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                .onFailure { message = "This phone doesn't offer an output picker" }
+        }
+    }
+
+    // ---- Dislikes, album actions, sharing ----
+
+    fun toggleDislike(track: Track): Job = io {
+        val (lib, on) = Core.toggleDislike(track)
+        library = lib
+        if (on == true) {
+            say("Disliked: you won't hear it on stations${if (skipDisliked) " and it's skipped in the queue" else ""}", "Undo" to { toggleDislike(track); Unit })
+            if (queue.current?.id == track.id && skipDisliked && room == null) next()
+        } else {
+            message = "Dislike removed"
+        }
+    }
+
+    /** "Like all" on an album or playlist page. */
+    fun likeAll(tracks: List<Track>) = io {
+        val (lib, n) = Core.likeMany(tracks.filterNot { it.isLocal })
+        library = lib
+        val added = (n as? Number)?.toInt() ?: 0
+        message = if (added == 0) "Already in your liked songs" else "Liked $added song${if (added == 1) "" else "s"}"
+    }
+
+    /** Shares a clean music.youtube.com link (no `si=` or other tracking). */
+    fun share(track: Track) = io {
+        if (track.isLocal) throw CoreException("Songs on your phone can't be shared as a link")
+        val link = Core.cleanShare("https://youtu.be/${track.id}") ?: "https://music.youtube.com/watch?v=${track.id}"
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "${track.title} · ${track.artist}\n$link")
+        getApplication<Application>().startActivity(Intent.createChooser(send, "Share song").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    // ---- Scrobbling (ListenBrainz, opt-in) ----
+
+    var scrobbleUser by mutableStateOf(playPrefs.getString("scrobbleUser", null))
+        private set
+
+    fun connectScrobbling(token: String) = io {
+        val (user, s) = Core.scrobbleConnect(token)
+        settings = s
+        scrobbleUser = user
+        playPrefs.edit().putString("scrobbleUser", user).apply()
+        message = "Scrobbling to ListenBrainz${if (user.isNotBlank()) " as $user" else ""}"
+    }
+
+    fun disconnectScrobbling() = io {
+        settings = Core.scrobbleDisconnect()
+        scrobbleUser = null
+        playPrefs.edit().remove("scrobbleUser").apply()
+        message = "Scrobbling off. The token was removed from this phone."
+    }
+
+    private fun scrobble(block: suspend () -> Unit) {
+        if (!settings.scrobbling || room != null) return
+        viewModelScope.launch {
+            ready.join()
+            try {
+                block()
+            } catch (_: CoreException) {
+                // A missed scrobble isn't worth interrupting the music for.
+            }
+        }
+    }
+
+    // ---- SponsorBlock categories ----
+
+    fun setSponsorCategory(id: String, on: Boolean) = io {
+        val cur = settings.sponsorCategories
+        val next = if (on) (cur + id).distinct() else cur - id
+        settings = Core.setSponsorCategories(next.ifEmpty { listOf("music_offtopic") })
+        segmentsFor.clear()
+    }
+
+    /** What SponsorBlock skipped in this session, newest first: (song, category, seconds saved). */
+    val skipLog = mutableStateListOf<Triple<String, String, Float>>()
+
+    // ---- Launcher shortcuts ----
+
+    fun openShortcut(target: String?) {
+        when (target) {
+            "search" -> selectTab(Tab.Search)
+            "library" -> selectTab(Tab.Library)
+            "explore" -> selectTab(Tab.Explore)
+            "radio" -> {
+                selectTab(Tab.Home)
+                (stations.saved.firstOrNull() ?: stations.recent.firstOrNull())?.let(::resumeStation)
+                    ?: library.history.firstOrNull { !it.isLocal }?.let(::startRadio)
+            }
+        }
+    }
+
+    /** Player › Sound panel. */
+    var soundOpen by mutableStateOf(false)
+
+    // ---- Player gestures: a short on-screen hint ("+10 s", "Volume 40%") ----
+    var gestureHint by mutableStateOf<String?>(null)
+        private set
+    private var hintJob: Job? = null
+
+    fun showHint(text: String) {
+        gestureHint = text
+        hintJob?.cancel()
+        hintJob = viewModelScope.launch {
+            delay(700)
+            gestureHint = null
+        }
+    }
+
+    fun seekBy(seconds: Float) {
+        val p = player ?: return
+        if (nowPlaying?.live == true) return
+        val to = (p.position + seconds).coerceIn(0f, (p.duration - 1f).coerceAtLeast(0f))
+        seek(to)
+        showHint(if (seconds > 0) "+${seconds.toInt()} s" else "${seconds.toInt()} s")
     }
 
     private fun playCurrent() {
@@ -834,8 +1058,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     override fun onStartedPlaying(id: String) {
         val t = queue.current?.takeIf { it.id == id } ?: return
         val now = java.time.ZonedDateTime.now()
+        if (skipDisliked && library.isDisliked(t.id) && room == null) {
+            message = "Skipped a song you disliked"
+            next()
+            return
+        }
         io { library = Core.played(t, now.hour, now.toLocalDate().toEpochDay()) }
         stationFeedback(t, "played")
+        playTrack = t
+        playStartedAt = System.currentTimeMillis()
+        playListened = 0f
+        scrobble { Core.scrobbleNowPlaying(t) }
     }
 
     // ---- Listening time, for local insights: counted from player progress, reported per song ----
@@ -843,8 +1076,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private var listenAt = -1f
     private var listenSeconds = 0f
 
+    /** The play being timed for scrobbling: song, start time, seconds listened. */
+    private var playTrack: Track? = null
+    private var playStartedAt = 0L
+    private var playListened = 0f
+
+    private fun finishPlay() {
+        val t = playTrack ?: return
+        val listened = playListened.toLong()
+        val started = playStartedAt
+        playTrack = null
+        playListened = 0f
+        if (listened > 30) scrobble { Core.scrobbleListen(t, started, listened) }
+    }
+
     private fun trackListening(id: String, seconds: Float) {
         if (id != listenId) {
+            if (playTrack?.id != id) finishPlay()
             flushListening()
             listenId = id
             listenAt = seconds
@@ -853,7 +1101,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         val step = seconds - listenAt
         listenAt = seconds
         // Ticks come every half second; anything bigger is a seek, not listening.
-        if (player?.playing == true && step > 0f && step <= 2.5f) listenSeconds += step
+        if (player?.playing == true && step > 0f && step <= 2.5f) {
+            listenSeconds += step
+            if (playTrack?.id == id) playListened += step
+        }
         if (listenSeconds >= 120f) flushListening(keep = true)
     }
 
@@ -1155,9 +1406,64 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
     }
 
+    // ---- Personalize: accent colour, colours from the album art, start tab, autoplay ----
+
+    /** A chosen accent (ARGB), or null for the theme's own. */
+    var accent by mutableStateOf<Long?>(look.getLong("accent", 0L).takeIf { it != 0L })
+        private set
+
+    /** The accent follows the cover of what's playing. */
+    var albumColors by mutableStateOf(look.getBoolean("albumColors", false))
+        private set
+    private var albumAccent: Long? = null
+
+    var startTab by mutableStateOf(tab)
+        private set
+
+    /** When the queue runs out, keep going with a station (YouTube Music's autoplay). */
+    var autoplay by mutableStateOf(look.getBoolean("autoplay", true))
+        private set
+
+    fun chooseAccent(argb: Long?) {
+        accent = argb
+        look.edit().putLong("accent", argb ?: 0L).apply()
+        Brand.palette = withLook(Palettes.byId(settings.theme))
+    }
+
+    fun updateAlbumColors(on: Boolean) {
+        albumColors = on
+        look.edit().putBoolean("albumColors", on).apply()
+        if (!on) albumAccent = null
+        Brand.palette = withLook(Palettes.byId(settings.theme))
+        nowPlaying?.let(::updateAlbumColor)
+    }
+
+    fun chooseStartTab(t: Tab) {
+        startTab = t
+        look.edit().putString("startTab", t.name).apply()
+    }
+
+    fun updateAutoplay(on: Boolean) {
+        autoplay = on
+        look.edit().putBoolean("autoplay", on).apply()
+        message = if (on) "Autoplay on: a station keeps the music going" else "Autoplay off: playback stops when the queue ends"
+    }
+
+    private fun updateAlbumColor(t: Track) {
+        if (!albumColors) return
+        viewModelScope.launch {
+            val img = ImageCache.load(t.art) ?: return@launch
+            val c = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { dev.foulfoxhacks.betteryts.music.ui.theme.AlbumColor.of(img) }.getOrNull() }
+            if (nowPlaying?.id != t.id) return@launch
+            albumAccent = c
+            Brand.palette = withLook(Palettes.byId(settings.theme))
+        }
+    }
+
     /** Active Look plugins' colours over a theme; later plugins win. Colours were checked by the core. */
-    private fun withLook(base: dev.foulfoxhacks.betteryts.music.ui.theme.Palette): dev.foulfoxhacks.betteryts.music.ui.theme.Palette {
+    private fun withLook(theme: dev.foulfoxhacks.betteryts.music.ui.theme.Palette): dev.foulfoxhacks.betteryts.music.ui.theme.Palette {
         fun color(hex: String?) = hex?.let { runCatching { androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+        val base = Palettes.withAccent(theme, (if (albumColors) albumAccent else null) ?: accent)
         var p = base
         for (plugin in settings.activeCommunity.filter { "palette" in it.permissions }) {
             color(plugin.palette["accent"])?.let { p = p.copy(accent = it, lineAccent = it.copy(alpha = 0.26f)) }
@@ -1335,6 +1641,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     private fun onTrackChanged(t: Track) {
         skippedUntil = 0f
+        updateAlbumColor(t)
         if (settings.activeCommunity.isNotEmpty()) roomMain.post { sendNowPlaying(force = true) }
         dislikes = null
         // SponsorBlock and dislike counts are YouTube data; device files have neither.
@@ -1371,12 +1678,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         if (room != null || !pluginOn("sponsorblock") || queue.current?.id != id) return
         val seg = segmentsFor[id]?.firstOrNull { seconds >= it.start && seconds < it.end - 0.5f && it.end > skippedUntil } ?: return
         skippedUntil = seg.end
+        val label = settings.sponsorCatalog.firstOrNull { it.first == seg.category }?.second?.lowercase()?.removeSuffix("s") ?: "non-music part"
+        skipLog.add(0, Triple(queue.current?.title ?: id, seg.category, seg.end - seconds))
+        while (skipLog.size > 50) skipLog.removeAt(skipLog.lastIndex)
         if (duration > 0 && seg.end >= duration - 1f) {
-            message = "Skipped the outro"
+            message = "Skipped the end ($label)"
             onEnded(id)
         } else {
             player?.seek(seg.end)
-            message = if (seg.start < 1f) "Skipped the intro" else "Skipped a non-music part"
+            say(if (seg.start < 1f) "Skipped the start ($label)" else "Skipped: $label", "Undo" to { player?.seek(seconds); Unit })
         }
     }
 

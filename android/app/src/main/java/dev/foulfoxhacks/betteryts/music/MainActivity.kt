@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
             override fun seekTo(seconds: Float) { vm.seek(seconds) }
         }
         syncMediaNotification()
-        // The fox intro plays on a cold start only (not after rotation or when returning to the app).
+        // The logo splash plays on a cold start only (not after rotation or when returning to the app).
         val coldStart = savedInstanceState == null
         setContent {
             var intro by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(coldStart) }
@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
                 // Keep the PiP play/pause button in step with the page.
                 LaunchedEffect(player.playing) { refreshPipParams() }
                 App(vm, player)
-                if (intro) dev.foulfoxhacks.betteryts.music.ui.FoxSplash { intro = false }
+                if (intro) dev.foulfoxhacks.betteryts.music.ui.LogoSplash { intro = false }
             }
         }
         ContextCompat.registerReceiver(
@@ -109,6 +109,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (intent?.action == "dev.foulfoxhacks.betteryts.music.SHORTCUT") {
+            vm.openShortcut(intent.getStringExtra("target"))
+            return
+        }
         val data = intent?.data
         if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "betterytsmusic" && data.host == "oauth" && data.path == "/spotify") {
             vm.finishSpotifySignIn(data)

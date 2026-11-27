@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 12+ system splash: nothing but the dark background; the fox intro (FoxSplash.kt) takes over. -->
+<!-- Android 12+ system splash: nothing but the dark background; the logo splash (LogoSplash.kt) takes over. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <solid android:color="@android:color/transparent" />
 </shape>

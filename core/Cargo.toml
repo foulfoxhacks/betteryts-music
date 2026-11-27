@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # rustls + webpki-roots: no OpenSSL to cross-compile, and the same TLS stack on every ABI.
-ureq = { version = "2.12", default-features = false, features = ["tls"] }
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
 jni = "0.21"
 
 [profile.release]

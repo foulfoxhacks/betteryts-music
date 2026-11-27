@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.youtube.com https://s.ytimg.com; frame-src https://www.youtube-nocookie.com https://www.youtube.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost">
+<title>BetterYTS Music</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="splash"><img src="logo.png" alt="BetterYTS: Open, Watch, Build"><p>BetterYTS Music · by FoulFoxHacks</p></div>
+<aside id="side">
+  <img class="logo" src="logo.png" alt="BetterYTS">
+  <nav>
+    <button data-tab="home" class="on">Home</button>
+    <button data-tab="search">Search</button>
+    <button data-tab="library">Library</button>
+    <button data-tab="stations">Stations</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <p class="credit">by FoulFoxHacks</p>
+</aside>
+<main id="main"></main>
+<section id="right">
+  <div id="video"><div id="yt"></div></div>
+  <div id="now"><b id="nowTitle">Nothing playing</b><span id="nowArtist"></span></div>
+  <div class="row" id="nowActions">
+    <button id="like" title="Like (L)">♡</button>
+    <button id="dislike" title="Dislike: stations never play it">Dislike</button>
+    <button id="radio" title="Start a station from this song">Radio</button>
+  </div>
+  <h3 id="queueHead">Up next</h3>
+  <ol id="queue"></ol>
+</section>
+<footer id="bar">
+  <div class="ctl">
+    <button id="prev" title="Previous (Shift+←)">⏮</button>
+    <button id="play" title="Play/pause (Space)">▶</button>
+    <button id="next" title="Next (Shift+→)">⏭</button>
+    <button id="shuffle" title="Shuffle">⤮</button>
+    <button id="repeat" title="Repeat">↻</button>
+  </div>
+  <span id="pos">0:00</span>
+  <input id="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+  <span id="dur">0:00</span>
+  <select id="speed" aria-label="Speed"><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select>
+  <input id="vol" type="range" min="0" max="1000" value="1000" aria-label="Volume" title="Volume (↑/↓)">
+  <span id="volText">100%</span>
+</footer>
+<div id="toast" role="status"></div>
+<script src="app.js"></script>
+</body>
+</html>

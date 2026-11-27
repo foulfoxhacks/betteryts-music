@@ -53,6 +53,38 @@ data class Palette(
 )
 
 object Palettes {
+    /** The BetterYTS logo: orange play, blue and cyan strokes, violet accents on midnight navy. */
+    val BetterYTS = Palette(
+        id = "betteryts",
+        ink = Color(0xFF0B1020), surface = Color(0xFF111A33), raised = Color(0xFF172246), selected = Color(0xFF1E2F63),
+        paper = Color(0xFFF2F5FF), muted = Color(0xFFB4BDD8),
+        accent = Color(0xFFFF6A00), onAccent = Color(0xFF0B1020), eyebrow = Color(0xFF5CC8F0),
+        warm = Color(0xFF0A84FF), hot = Color(0xFFFF6A00), violet = Color(0xFF6D28D9), love = Color(0xFFFF8A3D),
+        line = Color(0x29FFFFFF), lineAccent = Color(0x94FF6A00),
+        title = listOf(Color(0xFFF2F5FF), Color(0xFF00A3E0), Color(0xFF0A84FF), Color(0xFF6D28D9), Color(0xFFFF6A00)),
+        heading = listOf(Color(0xFFF2F5FF), Color(0xFF00A3E0), Color(0xFF6D28D9), Color(0xFFFF6A00)),
+        button = listOf(Color(0x4D0A84FF), Color(0x386D28D9), Color(0x24FF6A00)),
+        card = listOf(Color(0xF7111A33), Color(0xFC0B1020)),
+        glow = Color(0x590A84FF),
+        container = Color(0xFF08205B), onContainer = Color(0xFFF2F5FF),
+    )
+
+    /** True black for OLED screens, with the logo's cyan. */
+    val Amoled = Palette(
+        id = "amoled",
+        ink = Color(0xFF000000), surface = Color(0xFF0A0A0A), raised = Color(0xFF141414), selected = Color(0xFF1F2A33),
+        paper = Color(0xFFF5F5F5), muted = Color(0xFFB0B0B0),
+        accent = Color(0xFF00A3E0), onAccent = Color(0xFF000000), eyebrow = Color(0xFF5CC8F0),
+        warm = Color(0xFF0A84FF), hot = Color(0xFFFF6A00), violet = Color(0xFF7C3AED), love = Color(0xFFFF7AB6),
+        line = Color(0x26FFFFFF), lineAccent = Color(0x9400A3E0),
+        title = listOf(Color(0xFFF5F5F5), Color(0xFF00A3E0), Color(0xFF0A84FF)),
+        heading = listOf(Color(0xFFF5F5F5), Color(0xFF00A3E0), Color(0xFF7C3AED), Color(0xFFFF6A00)),
+        button = listOf(Color(0x3300A3E0), Color(0x220A84FF), Color(0x1AFF6A00)),
+        card = listOf(Color(0xFF0A0A0A), Color(0xFF000000)),
+        glow = Color(0x4000A3E0),
+        container = Color(0xFF003B57), onContainer = Color.White,
+    )
+
     /** akasammythepuppy.me: gold, ember and copper on warm ink. */
     val Ember = Palette(
         id = "ember",
@@ -85,8 +117,19 @@ object Palettes {
         container = Color(0xFF135CFF), onContainer = Color.White,
     )
 
-    val all = listOf(Ember, Mello)
-    fun byId(id: String?) = all.firstOrNull { it.id == id } ?: Ember
+    val all = listOf(BetterYTS, Amoled, Ember, Mello)
+    fun byId(id: String?) = all.firstOrNull { it.id == id } ?: BetterYTS
+
+    /** Swatches for Settings › Personalize › Accent. */
+    val accents = listOf(0xFFFF6A00, 0xFF0A84FF, 0xFF00A3E0, 0xFF7C3AED, 0xFFFF8DD0, 0xFFFFC857, 0xFF22C55E, 0xFFEF4444)
+
+    /** A palette with its accent swapped (keeping readable text on the accent). */
+    fun withAccent(p: Palette, argb: Long?): Palette {
+        if (argb == null) return p
+        val c = Color(argb)
+        val onAccent = if (c.red * 0.299f + c.green * 0.587f + c.blue * 0.114f > 0.6f) Color(0xFF0B1020) else Color.White
+        return p.copy(accent = c, onAccent = onAccent, lineAccent = c.copy(alpha = 0.58f), love = c)
+    }
 }
 
 /**
@@ -94,7 +137,7 @@ object Palettes {
  * the theme recomposes everything that uses a colour.
  */
 object Brand {
-    var palette by mutableStateOf(Palettes.Ember)
+    var palette by mutableStateOf(Palettes.BetterYTS)
 
     val Ink get() = palette.ink
     val Surface get() = palette.surface

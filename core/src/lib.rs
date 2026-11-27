@@ -22,6 +22,7 @@ pub mod smart;
 pub mod plugins;
 pub mod queue;
 pub mod radio;
+pub mod scrobble;
 pub mod spotify;
 pub mod stations;
 pub mod qr;

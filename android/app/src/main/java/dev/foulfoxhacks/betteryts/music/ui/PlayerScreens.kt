@@ -236,7 +236,9 @@ private fun PlayerTopBar(vm: AppViewModel, track: Track) {
         Box {
             IconButton(onClick = { menu = true }) { Icon(AppIcons.More, "More", tint = Brand.Paper) }
             DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = Brand.Raised) {
+                DropdownMenuItem(text = { Text("Sound, captions, output…", color = Brand.Paper) }, onClick = { menu = false; vm.soundOpen = true })
                 DropdownMenuItem(text = { Text("Add to playlist…", color = Brand.Paper) }, onClick = { menu = false; vm.playlistPickerFor = track })
+                if (!track.isLocal) DropdownMenuItem(text = { Text("Share", color = Brand.Paper) }, onClick = { menu = false; vm.share(track) })
                 if (vm.pluginOn("together") && vm.room == null) {
                     DropdownMenuItem(text = { Text("Start listening together", color = Brand.Paper) }, onClick = { menu = false; vm.startTogether() })
                     DropdownMenuItem(text = { Text("Join a room…", color = Brand.Paper) }, onClick = { menu = false; vm.joinRoomDialog = true })
@@ -292,6 +294,10 @@ private fun TitleRow(vm: AppViewModel, track: Track) {
                     Text(" ${compact(votes.second)}", color = Brand.Muted, fontSize = 12.sp)
                 }
             }
+        }
+        val disliked = vm.library.isDisliked(track.id)
+        IconButton(onClick = { vm.toggleDislike(track) }) {
+            Icon(AppIcons.ThumbDown, if (disliked) "Remove dislike" else "Dislike", tint = if (disliked) Brand.Gold else Brand.Muted)
         }
         val fav = vm.library.isFavorite(track.id)
         IconButton(onClick = { vm.toggleFavorite(track) }) {

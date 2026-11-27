@@ -139,6 +139,7 @@ fun CollectionScreen(vm: AppViewModel, c: Collection, pad: PaddingValues) {
                             item { BrandButton("Save", { vm.createPlaylist(page.title, page.tracks) }, icon = AppIcons.PlaylistAdd) }
                             if (vm.pluginOn("radio") && !c.isMix) item { BrandButton("Radio", { vm.startCollectionRadio(c.copy(title = page.title, thumbnail = page.thumbnail ?: c.thumbnail)) }, icon = AppIcons.Radio) }
                             item { BrandButton("Queue all", { vm.addAllToQueue(page.tracks) }, icon = AppIcons.QueueMusic) }
+                            item { BrandButton("Like all", { vm.likeAll(page.tracks) }, icon = AppIcons.Favorite) }
                         }
                         Spacer(Modifier.height(8.dp))
                     }

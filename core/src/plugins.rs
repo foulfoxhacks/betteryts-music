@@ -250,12 +250,22 @@ pub fn validate_manifest(text: &str) -> Result<CommunityPlugin, String> {
 	})
 }
 
-pub const THEMES: &[(&str, &str)] = &[("ember", "Ember · akasammythepuppy"), ("mello", "Mello · Mello Zone")];
+/// The first theme is the default for anyone who hasn't picked one.
+pub const THEMES: &[(&str, &str)] = &[
+	("betteryts", "BetterYTS · Open // Watch // Build"),
+	("amoled", "AMOLED · true black"),
+	("ember", "Ember · akasammythepuppy"),
+	("mello", "Mello · Mello Zone"),
+];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
 	pub theme: String,
+	/// SponsorBlock categories to skip (empty = non-music parts only).
+	pub sponsor_categories: Vec<String>,
+	/// ListenBrainz user token, when scrobbling is connected. Stays on the device.
+	pub listenbrainz_token: Option<String>,
 	/// Only plugins the user has switched; the rest follow the catalog's default.
 	pub plugins: BTreeMap<String, bool>,
 	/// Only categories the user has switched; the rest are on.
@@ -286,7 +296,7 @@ fn clean_list(items: &[String], max: usize) -> Vec<String> {
 
 impl Settings {
 	pub fn theme(&self) -> &str {
-		THEMES.iter().map(|(id, _)| *id).find(|id| *id == self.theme).unwrap_or("ember")
+		THEMES.iter().map(|(id, _)| *id).find(|id| *id == self.theme).unwrap_or(THEMES[0].0)
 	}
 
 	pub fn category_on(&self, id: &str) -> bool {
@@ -398,6 +408,9 @@ impl Settings {
 
 	pub fn view(&self) -> Value {
 		json!({
+			"sponsorCategories": clean_categories(&self.sponsor_categories),
+			"sponsorCatalog": SPONSOR_CATEGORIES.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),
+			"scrobbling": self.listenbrainz_token.is_some(),
 			"theme": self.theme(),
 			"themes": THEMES.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),
 			"plugins": CATALOG.iter().map(|p| {
@@ -452,20 +465,51 @@ impl SettingsStore {
 // SponsorBlock (via BetterYTS) and Return YouTube Dislike (via BetterYTS)
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Serialize, Debug, PartialEq, Clone, Copy)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 pub struct Segment {
 	pub start: f64,
 	pub end: f64,
+	pub category: String,
 }
 
 /// "music_offtopic" segments, merged and sorted. Tiny segments (under a second) are dropped.
+/// SponsorBlock categories the app can skip, with labels. `music_offtopic` is the default.
+pub const SPONSOR_CATEGORIES: &[(&str, &str)] = &[
+	("music_offtopic", "Non-music parts"),
+	("intro", "Intros"),
+	("outro", "Outros and end cards"),
+	("sponsor", "Sponsors"),
+	("selfpromo", "Self-promotion"),
+	("interaction", "Like/subscribe reminders"),
+	("preview", "Previews and recaps"),
+	("filler", "Filler and tangents"),
+];
+
+/// Only known categories, de-duplicated; empty means the default.
+pub fn clean_categories(cats: &[String]) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	for c in cats {
+		if SPONSOR_CATEGORIES.iter().any(|(id, _)| id == c) && !out.contains(c) {
+			out.push(c.clone());
+		}
+	}
+	if out.is_empty() {
+		out.push("music_offtopic".into());
+	}
+	out
+}
+
 pub fn parse_segments(v: &Value) -> Vec<Segment> {
+	parse_segments_for(v, &["music_offtopic".to_string()])
+}
+
+pub fn parse_segments_for(v: &Value, categories: &[String]) -> Vec<Segment> {
 	let mut segs: Vec<Segment> = v
 		.as_array()
 		.map(|a| {
 			a.iter()
-				.filter(|x| x.get("category").and_then(Value::as_str) == Some("music_offtopic"))
-				.filter_map(|x| Some(Segment { start: x.get("start")?.as_f64()?, end: x.get("end")?.as_f64()? }))
+				.filter(|x| x.get("category").and_then(Value::as_str).is_some_and(|c| categories.iter().any(|k| k == c)))
+				.filter_map(|x| Some(Segment { start: x.get("start")?.as_f64()?, end: x.get("end")?.as_f64()?, category: x.get("category")?.as_str()?.to_string() }))
 				.filter(|s| s.end - s.start >= 1.0)
 				.collect()
 		})
@@ -474,6 +518,7 @@ pub fn parse_segments(v: &Value) -> Vec<Segment> {
 	let mut merged: Vec<Segment> = Vec::new();
 	for s in segs {
 		match merged.last_mut() {
+			// Overlapping runs merge; the first one's category names the run.
 			Some(last) if s.start <= last.end + 0.5 => last.end = last.end.max(s.end),
 			_ => merged.push(s),
 		}
@@ -481,8 +526,9 @@ pub fn parse_segments(v: &Value) -> Vec<Segment> {
 	merged
 }
 
-pub fn segments(api: &Api, id: &str) -> Result<Vec<Segment>, String> {
-	Ok(parse_segments(&api.get_json(&format!("/api/segments/{}", enc(id)), &[("categories", "music_offtopic")])?))
+pub fn segments(api: &Api, id: &str, categories: &[String]) -> Result<Vec<Segment>, String> {
+	let cats = clean_categories(categories);
+	Ok(parse_segments_for(&api.get_json(&format!("/api/segments/{}", enc(id)), &[("categories", &cats.join(","))])?, &cats))
 }
 
 pub fn dislikes(api: &Api, id: &str) -> Result<Value, String> {
@@ -718,7 +764,9 @@ mod tests {
 	#[test]
 	fn settings_defaults_and_switches() {
 		let mut s = Settings::default();
-		assert_eq!(s.theme(), "ember");
+		assert_eq!(s.theme(), "betteryts", "the brand theme is the default");
+		let chose: Settings = serde_json::from_str(r#"{"theme":"ember"}"#).unwrap();
+		assert_eq!(chose.theme(), "ember", "a theme someone picked is kept");
 		assert!(s.enabled("lyrics"));
 		assert!(!s.enabled("nope"));
 		assert!(s.set_plugin("lyrics", false));
@@ -732,7 +780,7 @@ mod tests {
 		assert_eq!(v["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "lyrics").unwrap()["enabled"], false);
 		// A settings file written by a newer version with an unknown theme falls back.
 		let old: Settings = serde_json::from_str(r#"{"theme":"retro"}"#).unwrap();
-		assert_eq!(old.theme(), "ember");
+		assert_eq!(old.theme(), "betteryts");
 	}
 
 	#[test]
@@ -744,8 +792,11 @@ mod tests {
 			{ "category": "music_offtopic", "start": 8.2, "end": 12.0 },
 			{ "category": "music_offtopic", "start": 50.0, "end": 50.4 }
 		]);
-		assert_eq!(parse_segments(&v), vec![Segment { start: 0.0, end: 12.0 }, Segment { start: 305.7, end: 321.4 }]);
+		assert_eq!(parse_segments(&v), vec![Segment { start: 0.0, end: 12.0, category: "music_offtopic".into() }, Segment { start: 305.7, end: 321.4, category: "music_offtopic".into() }]);
 		assert!(parse_segments(&json!({})).is_empty());
+		let both = parse_segments_for(&v, &clean_categories(&["sponsor".into(), "bogus".into(), "sponsor".into()]));
+		assert_eq!(both, vec![Segment { start: 10.0, end: 20.0, category: "sponsor".into() }], "only chosen, known categories");
+		assert_eq!(clean_categories(&[]), ["music_offtopic"]);
 	}
 
 	#[test]

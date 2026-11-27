@@ -6,6 +6,7 @@
         <item name="android:colorAccent">@color/gold</item>
     </style>
 
-    <color name="ink">#050302</color>
-    <color name="gold">#FFC857</color>
+    <!-- The BetterYTS logo's midnight navy and play-button orange. -->
+    <color name="ink">#0B1020</color>
+    <color name="gold">#FF6A00</color>
 </resources>

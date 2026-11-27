@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the app icon: jump straight to Search, Library, Explore or a station. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="search" android:enabled="true" android:icon="@mipmap/ic_launcher" android:shortcutShortLabel="@string/shortcut_search">
+        <intent android:action="dev.foulfoxhacks.betteryts.music.SHORTCUT" android:targetPackage="dev.foulfoxhacks.betteryts.music" android:targetClass="dev.foulfoxhacks.betteryts.music.MainActivity">
+            <extra android:name="target" android:value="search" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="radio" android:enabled="true" android:icon="@mipmap/ic_launcher" android:shortcutShortLabel="@string/shortcut_radio">
+        <intent android:action="dev.foulfoxhacks.betteryts.music.SHORTCUT" android:targetPackage="dev.foulfoxhacks.betteryts.music" android:targetClass="dev.foulfoxhacks.betteryts.music.MainActivity">
+            <extra android:name="target" android:value="radio" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="library" android:enabled="true" android:icon="@mipmap/ic_launcher" android:shortcutShortLabel="@string/shortcut_library">
+        <intent android:action="dev.foulfoxhacks.betteryts.music.SHORTCUT" android:targetPackage="dev.foulfoxhacks.betteryts.music" android:targetClass="dev.foulfoxhacks.betteryts.music.MainActivity">
+            <extra android:name="target" android:value="library" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="explore" android:enabled="true" android:icon="@mipmap/ic_launcher" android:shortcutShortLabel="@string/shortcut_explore">
+        <intent android:action="dev.foulfoxhacks.betteryts.music.SHORTCUT" android:targetPackage="dev.foulfoxhacks.betteryts.music" android:targetClass="dev.foulfoxhacks.betteryts.music.MainActivity">
+            <extra android:name="target" android:value="explore" />
+        </intent>
+    </shortcut>
+</shortcuts>
