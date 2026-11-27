@@ -13,6 +13,8 @@ use crate::model::{Artist, Track};
 use crate::plugins::{validate_manifest, Settings};
 
 pub const FORMAT: &str = "betteryts-backup";
+/// Version of the app-only "music" section. Older app versions ignore what they don't know.
+pub const MUSIC_SCHEMA: u64 = 1;
 const MAX_BYTES: usize = 5_000_000;
 
 fn is_video_id(s: &str) -> bool {
@@ -80,9 +82,17 @@ fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
 pub fn export(lib: &Library, settings: &Settings, app_version: &str, now_ms: u64) -> Value {
 	json!({
 		"format": FORMAT,
+		// The shared format's version: the website refuses newer ones, so app-only data goes in
+		// the "music" section below (which the website ignores) instead of bumping this.
 		"version": 1,
 		"site": format!("music-{app_version}"),
 		"exportedAt": iso(now_ms),
+		"app": { "name": "BetterYTS Music", "platform": "android", "version": app_version, "musicSchema": MUSIC_SCHEMA },
+		// App-only extras. Play statistics and search history never leave the phone.
+		"music": {
+			"smart": lib.smart,
+			"pinned": lib.pinned.iter().filter(|k| k.starts_with("smart:")).collect::<Vec<_>>(),
+		},
 		"settings": {
 			"hiddenChannels": settings.hidden_channels.join("\n"),
 			"hiddenWords": settings.hidden_words.join(", "),
@@ -122,10 +132,63 @@ pub struct BackupSummary {
 	pub artists_added: usize,
 	pub history_added: usize,
 	pub plugins_installed: usize,
+	#[serde(default)]
+	pub smart_added: usize,
+	/// Liked songs and artists already in the library.
+	#[serde(default)]
+	pub duplicates: usize,
+	/// Entries that failed validation (bad IDs, unsafe plugins) and were left out.
+	#[serde(default)]
+	pub invalid: usize,
+	/// Playlists that didn't fit (the library's playlist limit).
+	#[serde(default)]
+	pub playlists_skipped: usize,
 }
 
-/// Checks a backup file and merges it into the library and settings.
-pub fn import(text: &str, store: &mut Store, settings: &mut Settings) -> Result<BackupSummary, String> {
+/// What a file contains, read before anything is applied (for the preview screen).
+#[derive(serde::Serialize, Default, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo {
+	/// "website" or "app", from the file's "site" field.
+	pub made_by: String,
+	pub app_version: Option<String>,
+	pub exported_at: Option<String>,
+	pub favorites: usize,
+	pub playlists: usize,
+	pub tracks_in_playlists: usize,
+	pub artists: usize,
+	pub history: usize,
+	pub plugins: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+	/// Add what's new; never remove anything.
+	Merge,
+	/// Liked songs, playlists, followed artists and history are replaced by the file's.
+	Replace,
+}
+
+impl Mode {
+	pub fn parse(s: Option<&str>) -> Mode {
+		if s == Some("replace") {
+			Mode::Replace
+		} else {
+			Mode::Merge
+		}
+	}
+}
+
+/// Checks the file and says what importing it would do, without changing anything.
+pub fn preview(text: &str, store: &Store, settings: &Settings, mode: Mode) -> Result<(BackupInfo, BackupSummary), String> {
+	let mut scratch = Store::in_memory();
+	scratch.lib = store.lib.clone();
+	let mut scratch_settings = settings.clone();
+	let sum = import_with(text, &mut scratch, &mut scratch_settings, mode)?;
+	Ok((info(text)?, sum))
+}
+
+fn parse(text: &str) -> Result<Value, String> {
 	if text.len() > MAX_BYTES {
 		return Err("That file is too big to be a BetterYTS backup".into());
 	}
@@ -134,16 +197,48 @@ pub fn import(text: &str, store: &mut Store, settings: &mut Settings) -> Result<
 		return Err("That isn't a BetterYTS backup".into());
 	}
 	match v.get("version").and_then(Value::as_u64) {
-		Some(1) => {}
-		Some(n) => return Err(format!("This backup is from a newer version (format {n}); update the app and try again")),
-		None => return Err("That isn't a BetterYTS backup".into()),
+		Some(1) => Ok(v),
+		Some(n) => Err(format!("This backup is from a newer version (format {n}); update the app and try again")),
+		None => Err("That isn't a BetterYTS backup".into()),
 	}
+}
+
+pub fn info(text: &str) -> Result<BackupInfo, String> {
+	let v = parse(text)?;
+	let empty = json!({});
+	let lib = v.get("library").filter(|l| l.is_object()).unwrap_or(&empty);
+	let site = v.get("site").and_then(Value::as_str).unwrap_or("");
+	let pls = list(lib, "playlists");
+	Ok(BackupInfo {
+		made_by: if site.starts_with("music-") { "app" } else { "website" }.into(),
+		app_version: site.strip_prefix("music-").filter(|x| !x.is_empty()).map(|x| clip(x, 20)).or_else(|| (!site.is_empty() && !site.starts_with("music-")).then(|| clip(site, 20))),
+		exported_at: v.get("exportedAt").and_then(Value::as_str).map(|x| clip(x, 30)),
+		favorites: list(lib, "favorites").len(),
+		playlists: pls.len(),
+		tracks_in_playlists: pls.iter().map(|p| list(p, "items").len()).sum(),
+		artists: list(lib, "subscriptions").len(),
+		history: list(lib, "history").len(),
+		plugins: list(&v, "plugins").len(),
+	})
+}
+
+/// Checks a backup file and merges it into the library and settings.
+pub fn import(text: &str, store: &mut Store, settings: &mut Settings) -> Result<BackupSummary, String> {
+	import_with(text, store, settings, Mode::Merge)
+}
+
+/// Checks the whole file first; only then changes the library (merging or replacing).
+pub fn import_with(text: &str, store: &mut Store, settings: &mut Settings, mode: Mode) -> Result<BackupSummary, String> {
+	let v = parse(text)?;
 	let empty = json!({});
 	let lib = v.get("library").filter(|l| l.is_object()).unwrap_or(&empty);
 	let mut sum = BackupSummary::default();
 
-	let liked: Vec<Track> = list(lib, "favorites").iter().filter_map(track).collect();
-	let followed: Vec<Artist> = list(lib, "subscriptions")
+	let raw_favorites = list(lib, "favorites");
+	let liked: Vec<Track> = raw_favorites.iter().filter_map(track).collect();
+	sum.invalid += raw_favorites.len() - liked.len();
+	let raw_subs = list(lib, "subscriptions");
+	let followed: Vec<Artist> = raw_subs
 		.iter()
 		.filter_map(|c| {
 			let id = c.get("id")?.as_str()?;
@@ -159,21 +254,40 @@ pub fn import(text: &str, store: &mut Store, settings: &mut Settings) -> Result<
 			.ok()
 		})
 		.collect();
-	let playlists: Vec<(String, String, Vec<Track>)> = list(lib, "playlists")
+	sum.invalid += raw_subs.len() - followed.len();
+	let mut bad_items = 0;
+	let raw_playlists = list(lib, "playlists");
+	let playlists: Vec<(String, String, Vec<Track>)> = raw_playlists
 		.iter()
 		.take(100)
 		.filter_map(|p| {
 			let id: String = p.get("id").and_then(Value::as_str).unwrap_or("").chars().filter(char::is_ascii_alphanumeric).take(16).collect();
 			let name = clip(p.get("name").and_then(Value::as_str).unwrap_or("Playlist"), 80);
-			let tracks: Vec<Track> = list(p, "items").iter().filter_map(track).collect();
+			let items = list(p, "items");
+			let tracks: Vec<Track> = items.iter().filter_map(track).collect();
+			bad_items += items.len() - tracks.len();
 			(!id.is_empty()).then_some((id, name, tracks))
 		})
 		.collect();
+	sum.invalid += bad_items + raw_playlists.len().min(100) - playlists.len();
+	sum.playlists_skipped += raw_playlists.len().saturating_sub(100);
+
+	// Everything is parsed and checked; only now is the library touched.
+	if mode == Mode::Replace {
+		let keep_pins: Vec<String> = store.lib.pinned.iter().filter(|k| k.starts_with("smart:") || k.starts_with("station:")).cloned().collect();
+		store.lib.favorites.clear();
+		store.lib.playlists.clear();
+		store.lib.followed.clear();
+		store.lib.history.clear();
+		store.lib.pinned = keep_pins;
+	}
 
 	// Reuse the YouTube import's merge rules, with the backup's own playlist IDs as the source.
+	let (n_liked, n_followed) = (liked.len(), followed.len());
 	let yt = store.lib.import_youtube(Vec::new(), liked, followed);
 	sum.favorites_added = yt.favorites_added;
 	sum.artists_added = yt.artists_added;
+	sum.duplicates = (n_liked - yt.favorites_added) + (n_followed - yt.artists_added);
 	for (id, name, tracks) in playlists {
 		let source = format!("backup:{id}");
 		if let Some(p) = store.lib.playlists.iter_mut().find(|p| p.source.as_deref() == Some(source.as_str())) {
@@ -210,6 +324,19 @@ pub fn import(text: &str, store: &mut Store, settings: &mut Settings) -> Result<
 			let id = p.get("id").and_then(Value::as_str).unwrap_or("");
 			settings.set_plugin(id, p.get("enabled").and_then(Value::as_bool) != Some(false));
 			sum.plugins_installed += 1;
+		} else {
+			sum.invalid += 1;
+		}
+	}
+	// App-only extras: smart playlists (rules), matched by name so a repeat import adds nothing.
+	for rule in list(v.get("music").unwrap_or(&empty), "smart").iter().take(crate::library::MAX_SMART) {
+		let name = clip(rule.get("name").and_then(Value::as_str).unwrap_or(""), 80);
+		let Some(r) = rule.get("rule").cloned().and_then(|r| serde_json::from_value::<crate::smart::Rule>(r).ok()) else {
+			sum.invalid += 1;
+			continue;
+		};
+		if !store.lib.smart.iter().any(|s| s.name.eq_ignore_ascii_case(&name)) && store.lib.save_smart(&name, r).is_some() {
+			sum.smart_added += 1;
 		}
 	}
 	Ok(sum)
@@ -244,7 +371,7 @@ mod tests {
 		let mut b = Store::in_memory();
 		let mut sb = Settings::default();
 		let sum = import(&text, &mut b, &mut sb).unwrap();
-		assert_eq!(sum, BackupSummary { favorites_added: 1, playlists_added: 1, playlists_updated: 0, artists_added: 1, history_added: 1, plugins_installed: 0 });
+		assert_eq!(sum, BackupSummary { favorites_added: 1, playlists_added: 1, playlists_updated: 0, artists_added: 1, history_added: 1, plugins_installed: 0, ..Default::default() });
 		assert_eq!(b.lib.playlists[0].tracks.len(), 2);
 		assert_eq!(b.lib.followed[0].name, "Rick Astley");
 		assert_eq!(sb.hidden_channels, vec!["Lofi Girl"]);
@@ -252,6 +379,62 @@ mod tests {
 		let again = import(&text, &mut b, &mut sb).unwrap();
 		assert_eq!((again.favorites_added, again.playlists_added, again.playlists_updated, again.history_added), (0, 0, 1, 0));
 		assert_eq!(b.lib.playlists.len(), 1);
+	}
+
+	#[test]
+	fn preview_changes_nothing_and_matches_the_real_import() {
+		let mut a = Store::in_memory();
+		a.lib.toggle_favorite(t("dQw4w9WgXcQ"));
+		a.lib.create_playlist("Road trip", vec![t("dQw4w9WgXcQ"), t("jNQXAC9IVRw")]);
+		a.lib.save_smart("Short A", crate::smart::Rule { max_seconds: Some(180), ..Default::default() });
+		let text = export(&a.lib, &Settings::default(), "0.10.0", 0).to_string();
+
+		let mut b = Store::in_memory();
+		b.lib.toggle_favorite(t("dQw4w9WgXcQ"));
+		let before = b.lib.clone();
+		let (info, would) = preview(&text, &b, &Settings::default(), Mode::Merge).unwrap();
+		assert_eq!(b.lib, before, "a preview never touches the library");
+		assert_eq!((info.made_by.as_str(), info.app_version.as_deref(), info.favorites, info.playlists, info.tracks_in_playlists), ("app", Some("0.10.0"), 1, 1, 2));
+		assert_eq!((would.favorites_added, would.duplicates, would.playlists_added, would.smart_added), (0, 1, 1, 1));
+		let did = import_with(&text, &mut b, &mut Settings::default(), Mode::Merge).unwrap();
+		assert_eq!(did, would, "the preview predicts the import exactly");
+		assert_eq!(b.lib.smart[0].name, "Short A", "smart playlists travel in the app-only section");
+		assert_eq!(import(&text, &mut b, &mut Settings::default()).unwrap().smart_added, 0, "no duplicate on a repeat import");
+	}
+
+	#[test]
+	fn replace_mode_swaps_the_library_but_keeps_stats() {
+		let mut a = Store::in_memory();
+		a.lib.toggle_favorite(t("jNQXAC9IVRw"));
+		let text = export(&a.lib, &Settings::default(), "0.10.0", 0).to_string();
+		let mut b = Store::in_memory();
+		b.lib.toggle_favorite(t("dQw4w9WgXcQ"));
+		b.lib.create_playlist("Mine", vec![]);
+		b.lib.record_play(&t("dQw4w9WgXcQ"), 1, None, None);
+		import_with(&text, &mut b, &mut Settings::default(), Mode::Replace).unwrap();
+		assert_eq!(b.lib.favorites.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["jNQXAC9IVRw"]);
+		assert!(b.lib.playlists.is_empty());
+		assert_eq!(b.lib.plays_of("dQw4w9WgXcQ"), 1, "play statistics aren't part of a backup, so they stay");
+		// A broken file fails before anything is replaced.
+		assert!(import_with("{bad", &mut b, &mut Settings::default(), Mode::Replace).is_err());
+		assert_eq!(b.lib.favorites.len(), 1);
+		assert_eq!(Mode::parse(Some("replace")), Mode::Replace);
+		assert_eq!(Mode::parse(None), Mode::Merge);
+	}
+
+	/// Every historical shape the app has written must keep importing.
+	#[test]
+	fn historical_backups_still_import() {
+		// App 0.8–0.9.4: version 1, no "app" or "music" sections.
+		let v094 = r#"{"format":"betteryts-backup","version":1,"site":"music-0.9.4","exportedAt":"2026-11-20T03:46:53Z",
+			"settings":{"hiddenChannels":"","hiddenWords":""},
+			"library":{"favorites":[{"id":"dQw4w9WgXcQ","title":"Song","channel":"Artist","channelRef":"UCuAXFkgsw1L7xaCfnd5JJOw","thumbnail":"https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg","duration":"3:33"}],
+			"history":[],"playlists":[{"id":"p18c","name":"Old","items":[],"createdAt":1}],"queue":[],"subscriptions":[]},"plugins":[]}"#;
+		let mut s = Store::in_memory();
+		let sum = import(v094, &mut s, &mut Settings::default()).unwrap();
+		assert_eq!((sum.favorites_added, sum.playlists_added, sum.invalid), (1, 1, 0));
+		let i = info(v094).unwrap();
+		assert_eq!((i.made_by.as_str(), i.app_version.as_deref()), ("app", Some("0.9.4")));
 	}
 
 	#[test]
@@ -272,6 +455,8 @@ mod tests {
 		let mut st = Settings::default();
 		let sum = import(&site.to_string(), &mut s, &mut st).unwrap();
 		assert_eq!((sum.favorites_added, sum.playlists_added, sum.artists_added, sum.plugins_installed), (1, 1, 0, 0));
+		assert_eq!(sum.invalid, 3, "bad favourite, bad channel and an unsafe plugin are counted");
+		assert_eq!(info(&site.to_string()).unwrap().made_by, "website");
 		assert_eq!(s.lib.favorites[0].thumbnail, None, "unsafe URLs are dropped");
 		assert_eq!(st.hidden_channels.len(), 2);
 		assert!(import("nope", &mut s, &mut st).unwrap_err().contains("JSON"));

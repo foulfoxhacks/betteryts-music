@@ -606,12 +606,19 @@ fn protv_line(s: &str) -> String {
 	}
 }
 
+/// Most entries one ProTV export holds; a longer queue is cut there.
+pub const PROTV_MAX_ENTRIES: usize = 500;
+
+/// ProTV playlist text: a compatibility export to paste into a ProTV world, not a VRChat command.
+/// Songs on the phone and anything that isn't a YouTube video ID are left out; repeats stay (a
+/// queue may repeat a song on purpose).
 pub fn protv_playlist(name: &str, tracks: &[Track]) -> String {
-	let header = protv_line(name);
+	let header = protv_line(&name.chars().take(100).collect::<String>());
 	let mut out = vec![if header.is_empty() { "BetterYTS Music queue".to_string() } else { header }, String::new()];
-	for t in tracks {
+	let valid = |id: &str| id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+	for t in tracks.iter().filter(|t| valid(&t.id)).take(PROTV_MAX_ENTRIES) {
 		out.push(format!("@https://www.youtube.com/watch?v={}", t.id));
-		out.push(format!("~{}", flat(&t.title)));
+		out.push(format!("~{}", flat(&t.title.chars().filter(|c| !c.is_control() || c.is_whitespace()).take(200).collect::<String>())));
 		out.push(protv_line(&[t.artist.as_str(), if t.live { "LIVE" } else { t.duration.as_deref().unwrap_or("") }].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join(" · ")));
 		out.push(String::new());
 	}
@@ -756,6 +763,24 @@ mod tests {
 		let t = Track { id: "FGBhQbmPwH8".into(), title: "One More\nTime".into(), artist: "#Daft Punk".into(), artist_id: None, thumbnail: None, duration: Some("5:21".into()), duration_seconds: None, live: false, plays: None };
 		let txt = protv_playlist("@queue", &[t]);
 		assert_eq!(txt, "\u{200b}@queue\n\n@https://www.youtube.com/watch?v=FGBhQbmPwH8\n~One More Time\n\u{200b}#Daft Punk · 5:21\n");
+	}
+
+	/// Golden output: Unicode kept, repeats kept, phone songs and bad IDs dropped, live labelled.
+	#[test]
+	fn protv_golden() {
+		let tr = |id: &str, title: &str, artist: &str, live: bool| -> Track { serde_json::from_value(json!({ "id": id, "title": title, "artist": artist, "duration": "3:00", "live": live })).unwrap() };
+		let tracks = [
+			tr("dQw4w9WgXcQ", "Ünïcödé 曲 🎵", "Ärtist", false),
+			tr("local:9", "On the phone", "Me", false),
+			tr("bad id", "Nope", "X", false),
+			tr("dQw4w9WgXcQ", "Ünïcödé 曲 🎵", "Ärtist", false),
+			tr("jfKfPfyJRdk", "lofi radio\u{7}", "Lofi Girl", true),
+		];
+		let golden = "Mix ~ 1\n\n@https://www.youtube.com/watch?v=dQw4w9WgXcQ\n~Ünïcödé 曲 🎵\nÄrtist · 3:00\n\n@https://www.youtube.com/watch?v=dQw4w9WgXcQ\n~Ünïcödé 曲 🎵\nÄrtist · 3:00\n\n@https://www.youtube.com/watch?v=jfKfPfyJRdk\n~lofi radio\nLofi Girl · LIVE\n";
+		assert_eq!(protv_playlist("Mix ~ 1", &tracks), golden);
+		assert_eq!(protv_playlist("", &[]), "BetterYTS Music queue\n");
+		let many: Vec<Track> = (0..PROTV_MAX_ENTRIES + 10).map(|i| tr(&format!("{i:0>11}"), "x", "y", false)).collect();
+		assert_eq!(protv_playlist("q", &many).matches("\n@https://").count(), PROTV_MAX_ENTRIES);
 	}
 
 	/// Hits LRCLIB. Run with `cargo test -- --ignored`.

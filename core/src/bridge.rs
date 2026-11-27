@@ -10,10 +10,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::api::{Api, Filter, DEFAULT_BASE};
+use crate::error::CoreError;
 use crate::library::Store;
 use crate::model::{Artist, Track};
 use crate::queue::Queue;
 use crate::plugins::SettingsStore;
+use crate::stations::{Station, StationStore};
 use crate::{google, links, plugins, queue, radio};
 
 struct State {
@@ -21,6 +23,7 @@ struct State {
 	queue: Queue,
 	store: Store,
 	settings: SettingsStore,
+	stations: StationStore,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -29,9 +32,9 @@ fn state() -> MutexGuard<'static, Option<State>> {
 	STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn with_state<R>(f: impl FnOnce(&mut State) -> Result<R, String>) -> Result<R, String> {
+fn with_state<R>(f: impl FnOnce(&mut State) -> Result<R, CoreError>) -> Result<R, CoreError> {
 	let mut guard = state();
-	let s = guard.get_or_insert_with(|| State { api: Api::new(DEFAULT_BASE), queue: Queue::default(), store: Store::in_memory(), settings: SettingsStore::in_memory() });
+	let s = guard.get_or_insert_with(|| State { api: Api::new(DEFAULT_BASE), queue: Queue::default(), store: Store::in_memory(), settings: SettingsStore::in_memory(), stations: StationStore::in_memory() });
 	f(s)
 }
 
@@ -39,36 +42,79 @@ fn api() -> Api {
 	with_state(|s| Ok(s.api.clone())).expect("infallible")
 }
 
-fn arg<T: DeserializeOwned>(args: &Value, key: &str) -> Result<T, String> {
+fn arg<T: DeserializeOwned>(args: &Value, key: &str) -> Result<T, CoreError> {
 	let v = args.get(key).cloned().unwrap_or(Value::Null);
-	serde_json::from_value(v).map_err(|e| format!("Bad argument `{key}`: {e}"))
+	serde_json::from_value(v).map_err(|e| CoreError::invalid(format!("Bad argument `{key}`: {e}")))
 }
 
 fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 	args.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
-fn to_value<T: serde::Serialize>(v: T) -> Result<Value, String> {
-	serde_json::to_value(v).map_err(|e| e.to_string())
+fn to_value<T: serde::Serialize>(v: T) -> Result<Value, CoreError> {
+	serde_json::to_value(v).map_err(|e| CoreError::from(e.to_string()))
 }
 
-fn queue_op(f: impl FnOnce(&mut Queue)) -> Result<Value, String> {
+fn queue_op(f: impl FnOnce(&mut Queue)) -> Result<Value, CoreError> {
 	with_state(|s| {
 		f(&mut s.queue);
 		to_value(s.queue.view())
 	})
 }
 
+/// The library as the app sees it: play statistics stay in the core (they're only read through
+/// `insights` and `smart.*`), so the reply after every change stays small.
+fn library_view(lib: &crate::library::Library) -> Result<Value, CoreError> {
+	let mut v = to_value(lib)?;
+	if let Some(o) = v.as_object_mut() {
+		o.remove("stats");
+		o.remove("listening");
+	}
+	Ok(v)
+}
+
 /// Changes the library, saves it, and returns `{ result, library }`.
-fn library_op<R: serde::Serialize>(f: impl FnOnce(&mut crate::library::Library) -> R) -> Result<Value, String> {
+fn library_op<R: serde::Serialize>(f: impl FnOnce(&mut crate::library::Library) -> R) -> Result<Value, CoreError> {
 	with_state(|s| {
 		let result = f(&mut s.store.lib);
 		s.store.save()?;
-		Ok(json!({ "result": to_value(result)?, "library": to_value(&s.store.lib)? }))
+		Ok(json!({ "result": to_value(result)?, "library": library_view(&s.store.lib)? }))
 	})
 }
 
-fn handle(method: &str, a: &Value) -> Result<Value, String> {
+/// The artists you already listen to (compacted names), for station tuning.
+fn known_artists(lib: &crate::library::Library) -> std::collections::HashSet<String> {
+	let names = lib.favorites.iter().map(|t| &t.artist).chain(lib.history.iter().map(|h| &h.track.artist)).chain(lib.followed.iter().map(|a| &a.name));
+	names.map(|n| crate::plugins::compact(n)).filter(|n| !n.is_empty()).collect()
+}
+
+/// Runs a station step without holding the lock (it goes to the network), then stores the result.
+fn station_step(station: Station, step: impl FnOnce(&mut Station, &crate::stations::Live, &std::collections::HashSet<String>, &dyn Fn(&Track) -> bool) -> Result<crate::stations::Outcome, String>) -> Result<Value, CoreError> {
+	let (api, known, settings) = with_state(|s| Ok((s.api.clone(), known_artists(&s.store.lib), s.settings.settings.clone())))?;
+	let mut station = station;
+	let hidden = |t: &Track| settings.hides_track(t);
+	let outcome = step(&mut station, &crate::stations::Live { api: &api }, &known, &hidden)?;
+	with_state(|s| {
+		s.stations.stations.set_current(station);
+		s.stations.stations.sync_saved();
+		s.stations.save()?;
+		let all = &s.stations.stations;
+		let view = all.current.as_ref().map(|c| crate::stations::view(c, all));
+		Ok(json!({ "station": to_value(view)?, "tracks": to_value(&outcome.tracks)?, "recovered": outcome.recovered, "filtered": outcome.filtered }))
+	})
+}
+
+fn stations_view(s: &State) -> Result<Value, CoreError> {
+	let all = &s.stations.stations;
+	let v = |list: &[Station]| list.iter().map(|x| crate::stations::view(x, all)).collect::<Vec<_>>();
+	Ok(json!({
+		"current": to_value(all.current.as_ref().map(|c| crate::stations::view(c, all)))?,
+		"saved": to_value(v(&all.saved))?,
+		"recent": to_value(v(&all.recent))?,
+	}))
+}
+
+fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 	match method {
 		"init" => {
 			let dir: String = arg(a, "dataDir")?;
@@ -77,7 +123,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let queue = guard.take().map(|s| s.queue).unwrap_or_default();
 			let mut api = Api::new(&base);
 			api.region = opt_str(a, "region").unwrap_or("").chars().filter(|c| c.is_ascii_alphabetic()).take(2).collect::<String>().to_uppercase();
-			*guard = Some(State { api, queue, store: Store::open(Path::new(&dir)), settings: SettingsStore::open(Path::new(&dir)) });
+			*guard = Some(State { api, queue, store: Store::open(Path::new(&dir)), settings: SettingsStore::open(Path::new(&dir)), stations: StationStore::open(Path::new(&dir)) });
 			Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "baseUrl": base }))
 		}
 
@@ -105,6 +151,85 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			})?;
 			to_value(page)
 		}
+		// ---- stations (radio that owns its continuation, repeats, feedback and recovery) ----
+		"station.start" => {
+			let seed = crate::stations::Seed { kind: arg(a, "kind")?, id: arg(a, "id")?, title: arg::<Option<String>>(a, "title")?.unwrap_or_default(), art: arg(a, "art")? };
+			let mix: crate::stations::Mix = arg::<Option<crate::stations::Mix>>(a, "mix")?.unwrap_or_default();
+			let own: Option<Vec<Track>> = arg(a, "tracks")?;
+			// Starting a station you've had before keeps its tuning and blocked songs.
+			let known = with_state(|s| Ok(s.stations.stations.find(&crate::stations::station_id(seed.kind, &seed.id))))?;
+			let station = match known {
+				Some(mut st) => {
+					st.seen.clear();
+					st.next = None;
+					st.radio_from = (seed.kind == crate::stations::SeedKind::Track).then(|| seed.id.clone());
+					if a.get("mix").is_some() {
+						st.mix = mix;
+					}
+					st
+				}
+				None => Station::new(seed, mix, Store::now()),
+			};
+			station_step(station, |st, src, known, hidden| crate::stations::start(st, src, own, known, hidden))
+		}
+		"station.resume" => {
+			let id: String = arg(a, "id")?;
+			let mut st = with_state(|s| s.stations.stations.find(&id).ok_or_else(|| CoreError::invalid("That station isn't saved anymore")))?;
+			st.seen.clear();
+			st.next = None;
+			let own: Option<Vec<Track>> = arg(a, "tracks")?;
+			station_step(st, |st, src, known, hidden| crate::stations::start(st, src, own, known, hidden))
+		}
+		"station.more" => {
+			let st = with_state(|s| s.stations.stations.current.clone().ok_or_else(|| CoreError::invalid("No station is playing")))?;
+			station_step(st, |st, src, known, hidden| crate::stations::more(st, src, known, hidden))
+		}
+		"station.feedback" => {
+			let (t, kind): (Track, crate::stations::Feedback) = (arg(a, "track")?, arg(a, "kind")?);
+			with_state(|s| {
+				let all = &mut s.stations.stations;
+				let Some(cur) = all.current.as_mut() else { return Ok(json!({ "result": Value::Null })) };
+				let result = crate::stations::feedback(cur, &t, kind, Store::now());
+				all.sync_saved();
+				s.stations.save()?;
+				Ok(json!({ "result": result, "stations": stations_view(s)? }))
+			})
+		}
+		"station.tune" => {
+			let mix: crate::stations::Mix = arg(a, "mix")?;
+			with_state(|s| {
+				if let Some(cur) = s.stations.stations.current.as_mut() {
+					cur.mix = mix;
+				}
+				s.stations.stations.sync_saved();
+				s.stations.save()?;
+				stations_view(s)
+			})
+		}
+		"station.save" => with_state(|s| {
+			if !s.stations.stations.save_current() {
+				return Err(CoreError::from("Couldn't save this station (nothing playing, or 50 saved already)"));
+			}
+			s.stations.save()?;
+			stations_view(s)
+		}),
+		"station.delete" => {
+			let id: String = arg(a, "id")?;
+			with_state(|s| {
+				s.stations.stations.delete(&id);
+				s.store.lib.pinned.retain(|k| k != &format!("station:{id}"));
+				s.store.save()?;
+				s.stations.save()?;
+				stations_view(s)
+			})
+		}
+		"station.stop" => with_state(|s| {
+			s.stations.stations.stop();
+			s.stations.save()?;
+			stations_view(s)
+		}),
+		"stations.list" => with_state(|s| stations_view(s)),
+
 		"playlist" => to_value(api().playlist(&arg::<String>(a, "id")?, opt_str(a, "page"))?),
 		"artist" => to_value(api().artist(&arg::<String>(a, "id")?, opt_str(a, "page"))?),
 		"feed" => {
@@ -185,16 +310,109 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 		"queue.clear" => queue_op(queue::Queue::clear),
 
 		// ---- library ----
-		"library.get" => with_state(|s| to_value(&s.store.lib)),
+		"library.get" => with_state(|s| library_view(&s.store.lib)),
 		"library.favorite" => {
 			let t: Track = arg(a, "track")?;
 			library_op(|l| l.toggle_favorite(t))
 		}
 		"library.played" => {
 			let t: Track = arg(a, "track")?;
-			library_op(|l| l.add_history(t, Store::now()))
+			// The phone's local hour and day, for insights; the core doesn't know the time zone.
+			let hour: Option<u32> = arg(a, "hour")?;
+			let day: Option<u32> = arg(a, "day")?;
+			let now = Store::now();
+			library_op(|l| {
+				l.record_play(&t, now, hour, day);
+				l.add_history(t, now)
+			})
+		}
+		"library.listened" => {
+			let (id, seconds): (String, u64) = (arg(a, "id")?, arg(a, "seconds")?);
+			with_state(|s| {
+				s.store.lib.add_listened(&id, seconds);
+				s.store.save()?;
+				Ok(Value::Null)
+			})
 		}
 		"library.clearHistory" => library_op(|l| l.history.clear()),
+		"library.removeHistory" => {
+			let id: String = arg(a, "id")?;
+			library_op(|l| l.remove_history(&id))
+		}
+		"library.clearStats" => library_op(|l| l.clear_stats()),
+		"library.addSearch" => {
+			let q: String = arg(a, "query")?;
+			library_op(|l| l.add_search(&q, Store::now()))
+		}
+		"library.removeSearch" => {
+			let q: String = arg(a, "query")?;
+			library_op(|l| l.remove_search(&q))
+		}
+		"library.clearSearches" => library_op(|l| l.searches.clear()),
+		"library.pin" => {
+			let key: String = arg(a, "key")?;
+			library_op(|l| l.toggle_pin(&key))
+		}
+		"library.movePlaylistTrack" => {
+			let (id, from, to): (String, usize, usize) = (arg(a, "id")?, arg(a, "from")?, arg(a, "to")?);
+			library_op(|l| l.move_in_playlist(&id, from, to))
+		}
+		"library.removeManyFromPlaylist" => {
+			let (id, indexes): (String, Vec<usize>) = (arg(a, "id")?, arg(a, "indexes")?);
+			library_op(|l| l.remove_many_from_playlist(&id, &indexes))
+		}
+		"library.addManyToPlaylist" => {
+			let (id, tracks): (String, Vec<Track>) = (arg(a, "id")?, arg(a, "tracks")?);
+			library_op(|l| l.add_many_to_playlist(&id, tracks))
+		}
+		"library.dedupePlaylist" => {
+			let id: String = arg(a, "id")?;
+			library_op(|l| l.dedupe_playlist(&id))
+		}
+		"library.mergePlaylists" => {
+			let (target, source): (String, String) = (arg(a, "target")?, arg(a, "source")?);
+			let delete: bool = arg::<Option<bool>>(a, "deleteSource")?.unwrap_or(false);
+			library_op(|l| l.merge_playlists(&target, &source, delete))
+		}
+		"library.duplicatePlaylist" => {
+			let id: String = arg(a, "id")?;
+			library_op(|l| l.duplicate_playlist(&id))
+		}
+
+		// ---- smart playlists and insights (worked out on the phone) ----
+		"smart.list" => with_state(|s| to_value(crate::smart::list(&s.store.lib, Store::now()))),
+		"smart.tracks" => {
+			let rule: Option<crate::smart::Rule> = arg(a, "rule")?;
+			let id = opt_str(a, "id").map(String::from);
+			with_state(|s| {
+				let rule = match (rule, id) {
+					(Some(r), _) => r,
+					(None, Some(id)) => crate::smart::rule_for(&s.store.lib, &id).ok_or_else(|| CoreError::invalid("That smart playlist doesn't exist anymore"))?,
+					(None, None) => return Err(CoreError::invalid("Bad argument `rule`")),
+				};
+				let tracks = crate::smart::evaluate(&s.store.lib, &rule, Store::now());
+				Ok(json!({ "tracks": to_value(&tracks)?, "description": crate::smart::describe(&rule) }))
+			})
+		}
+		"smart.preview" => {
+			let rule: crate::smart::Rule = arg(a, "rule")?;
+			with_state(|s| {
+				let tracks = crate::smart::evaluate(&s.store.lib, &rule, Store::now());
+				Ok(json!({ "count": tracks.len(), "tracks": to_value(&tracks[..tracks.len().min(25)])?, "description": crate::smart::describe(&rule.clone().clamped()) }))
+			})
+		}
+		"smart.save" => {
+			let (name, rule): (String, crate::smart::Rule) = (arg(a, "name")?, arg(a, "rule")?);
+			library_op(|l| l.save_smart(&name, rule))
+		}
+		"smart.delete" => {
+			let id: String = arg(a, "id")?;
+			library_op(|l| l.delete_smart(&id))
+		}
+		"insights" => {
+			let today: u32 = arg(a, "today")?;
+			with_state(|s| to_value(crate::smart::insights(&s.store.lib, today)))
+		}
 		"library.createPlaylist" => {
 			let name: String = arg::<Option<String>>(a, "name")?.unwrap_or_default();
 			let tracks: Vec<Track> = arg::<Option<Vec<Track>>>(a, "tracks")?.unwrap_or_default();
@@ -249,7 +467,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let id: String = arg(a, "theme")?;
 			with_state(|s| {
 				if !s.settings.settings.set_theme(&id) {
-					return Err(format!("Unknown theme `{id}`"));
+					return Err(CoreError::invalid(format!("Unknown theme `{id}`")));
 				}
 				s.settings.save()?;
 				Ok(s.settings.settings.view())
@@ -259,7 +477,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let (id, on): (String, bool) = (arg(a, "id")?, arg(a, "enabled")?);
 			with_state(|s| {
 				if !s.settings.settings.set_plugin(&id, on) {
-					return Err(format!("Unknown plugin `{id}`"));
+					return Err(CoreError::invalid(format!("Unknown plugin `{id}`")));
 				}
 				s.settings.save()?;
 				Ok(s.settings.settings.view())
@@ -286,10 +504,19 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let version: String = arg::<Option<String>>(a, "appVersion")?.unwrap_or_default();
 			with_state(|s| Ok(json!({ "text": crate::backup::export(&s.store.lib, &s.settings.settings, &version, Store::now()).to_string() })))
 		}
+		"backup.preview" => {
+			let text: String = arg(a, "text")?;
+			let mode = crate::backup::Mode::parse(opt_str(a, "mode"));
+			with_state(|s| {
+				let (info, summary) = crate::backup::preview(&text, &s.store, &s.settings.settings, mode)?;
+				Ok(json!({ "info": to_value(info)?, "summary": to_value(summary)? }))
+			})
+		}
 		"backup.import" => {
 			let text: String = arg(a, "text")?;
+			let mode = crate::backup::Mode::parse(opt_str(a, "mode"));
 			with_state(|s| {
-				let sum = crate::backup::import(&text, &mut s.store, &mut s.settings.settings)?;
+				let sum = crate::backup::import_with(&text, &mut s.store, &mut s.settings.settings, mode)?;
 				s.store.save()?;
 				s.settings.save()?;
 				Ok(json!({ "summary": sum, "settings": s.settings.settings.view() }))
@@ -303,13 +530,19 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 		"spotify.playlists" => to_value(crate::spotify_account::playlists(&arg::<String>(a, "token")?)?),
 		"spotify.tracks" => to_value(crate::spotify_account::tracks(&arg::<String>(a, "token")?, &arg::<String>(a, "id")?, &arg::<String>(a, "name")?)?),
 		"inworld.check" => to_value(crate::inworld::check(&api(), &arg::<String>(a, "code")?)?),
-		"inworld.send" => {
-			let (code, service): (String, String) = (arg(a, "code")?, arg(a, "service")?);
-			let ids: Vec<String> = arg(a, "playlistIds")?;
+		"inworld.preview" | "inworld.send" => {
+			let ids: Vec<String> = arg::<Option<Vec<String>>>(a, "playlistIds")?.unwrap_or_default();
 			let include_liked: bool = arg::<Option<bool>>(a, "liked")?.unwrap_or(false);
+			let include_queue: bool = arg::<Option<bool>>(a, "queue")?.unwrap_or(false);
 			let save: bool = arg::<Option<bool>>(a, "save")?.unwrap_or(false);
 			let lists = with_state(|s| {
 				let mut out: Vec<(String, Vec<Track>)> = Vec::new();
+				if include_queue {
+					let q = s.queue.view();
+					if !q.tracks.is_empty() {
+						out.push(("Now playing queue".to_string(), q.tracks));
+					}
+				}
 				if include_liked && !s.store.lib.favorites.is_empty() {
 					out.push(("Liked songs".to_string(), s.store.lib.favorites.clone()));
 				}
@@ -318,9 +551,17 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 				}
 				Ok(out)
 			})?;
+			if method == "inworld.preview" {
+				let (_, pv) = crate::inworld::payload("XXXX-XXXX", "youtube", save, &lists)?;
+				return to_value(pv);
+			}
+			let (code, service): (String, String) = (arg(a, "code")?, arg(a, "service")?);
 			let (playlists, tracks) = crate::inworld::send(&api(), &code, &service, save, &lists)?;
-			Ok(json!({ "playlists": playlists, "tracks": tracks }))
+			let names: Vec<String> = lists.iter().map(|(n, _)| n.clone()).collect();
+			let lib = library_op(|l| l.record_world_send(crate::library::WorldSend { at: Store::now(), service: service.clone(), playlists, tracks, saved: save, expires_at: None, names }))?;
+			Ok(json!({ "playlists": playlists, "tracks": tracks, "library": lib["library"] }))
 		}
+		"inworld.forget" => library_op(|l| l.world_sends.clear()),
 		"qr" => {
 			let q = crate::qr::encode(&arg::<String>(a, "text")?)?;
 			Ok(json!({ "size": q.size, "rows": q.rows() }))
@@ -329,7 +570,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let (id, on): (String, bool) = (arg(a, "id")?, arg(a, "enabled")?);
 			with_state(|s| {
 				if !s.settings.settings.set_category(&id, on) {
-					return Err(format!("Unknown category `{id}`"));
+					return Err(CoreError::invalid(format!("Unknown category `{id}`")));
 				}
 				s.settings.save()?;
 				Ok(s.settings.settings.view())
@@ -347,7 +588,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			let id: String = arg(a, "id")?;
 			with_state(|s| {
 				if !s.settings.settings.remove(&id) {
-					return Err(format!("No community plugin `{id}`"));
+					return Err(CoreError::invalid(format!("No community plugin `{id}`")));
 				}
 				s.settings.save()?;
 				Ok(s.settings.settings.view())
@@ -358,14 +599,24 @@ fn handle(method: &str, a: &Value) -> Result<Value, String> {
 			Ok(json!({ "code": v.get("code"), "hostKey": v.get("hostKey") }))
 		}
 		"plugin.segments" => to_value(plugins::segments(&api(), &arg::<String>(a, "id")?)?),
-		"plugin.dislikes" => plugins::dislikes(&api(), &arg::<String>(a, "id")?),
+		"plugin.dislikes" => Ok(plugins::dislikes(&api(), &arg::<String>(a, "id")?)?),
 		"plugin.lyrics" => to_value(plugins::lyrics(&arg::<Track>(a, "track")?)?),
 		"plugin.protv" => {
 			let name: String = arg::<Option<String>>(a, "name")?.unwrap_or_default();
 			Ok(Value::String(plugins::protv_playlist(&name, &arg::<Vec<Track>>(a, "tracks")?)))
 		}
 
-		other => Err(format!("Unknown method `{other}`")),
+		// ---- diagnostics (no queries, tokens or IDs; see diag.rs) ----
+		"diagnostics.get" => {
+			let records = crate::diag::recent();
+			Ok(json!({ "summary": crate::diag::summarize(&records), "requests": to_value(records)?, "coreVersion": env!("CARGO_PKG_VERSION") }))
+		}
+		"diagnostics.clear" => {
+			crate::diag::clear();
+			Ok(Value::Null)
+		}
+
+		other => Err(CoreError::invalid(format!("Unknown method `{other}`"))),
 	}
 }
 
@@ -373,7 +624,16 @@ pub fn dispatch(method: &str, args: &str) -> String {
 	let args: Value = if args.trim().is_empty() { Value::Null } else { serde_json::from_str(args).unwrap_or(Value::Null) };
 	let reply = match handle(method, &args) {
 		Ok(data) => json!({ "ok": true, "data": data }),
-		Err(error) => json!({ "ok": false, "error": error }),
+		Err(e) => {
+			let mut r = json!({ "ok": false, "error": e.message, "code": e.code, "retryable": e.retryable });
+			if let Some(s) = e.retry_after {
+				r["retryAfter"] = json!(s);
+			}
+			if let Some(id) = e.request_id {
+				r["requestId"] = json!(id);
+			}
+			r
+		}
 	};
 	reply.to_string()
 }
@@ -412,6 +672,16 @@ mod tests {
 		let id = pl["data"]["result"]["id"].as_str().unwrap().to_string();
 		assert_eq!(call("library.addToPlaylist", json!({ "id": id, "track": track("bbbbbbbbbbb") }))["data"]["result"], true);
 		call("library.played", json!({ "track": track("bbbbbbbbbbb") }));
+		call("library.played", json!({ "track": track("bbbbbbbbbbb"), "hour": 21, "day": 20_000 }));
+		call("library.listened", json!({ "id": "bbbbbbbbbbb", "seconds": 125 }));
+		let ins = call("insights", json!({ "today": 20_000 }));
+		assert_eq!((ins["data"]["totalPlays"].as_u64(), ins["data"]["minutes"].as_u64(), ins["data"]["currentStreak"].as_u64()), (Some(2), Some(2), Some(1)));
+		let smart = call("smart.list", json!({}));
+		assert!(smart["data"].as_array().unwrap().iter().any(|s| s["id"] == "most-played"));
+		let prev = call("smart.preview", json!({ "rule": { "source": "favorites" } }));
+		assert_eq!(prev["data"]["count"], 1);
+		assert!(call("library.get", json!({}))["data"].get("stats").is_none(), "stats stay in the core");
+		assert_eq!(call("library.addSearch", json!({ "query": "lofi" }))["data"]["library"]["searches"][0]["query"], "lofi");
 
 		// Re-init (as after an app restart): the library comes back from disk.
 		call("init", json!({ "dataDir": dir.to_string_lossy() }));
@@ -423,7 +693,9 @@ mod tests {
 		let bad = call("queue.jump", json!({}));
 		assert_eq!(bad["ok"], false);
 		assert!(bad["error"].as_str().unwrap().contains("position"));
+		assert_eq!((bad["code"].as_str(), bad["retryable"].as_bool()), (Some("INVALID_ARGUMENT"), Some(false)), "errors carry a stable code");
 		assert_eq!(call("nope", json!({}))["ok"], false);
+		assert!(call("diagnostics.get", json!({}))["data"]["summary"].is_object());
 		assert_eq!(call("resolveLink", json!({ "text": "https://youtu.be/dQw4w9WgXcQ" }))["data"]["linkType"], "video");
 
 		// Settings persist across a restart too.

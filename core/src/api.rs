@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::error::{code, CoreError};
 use crate::model::{self, Artist, Page, Track};
 
 #[cfg(test)]
@@ -210,48 +211,68 @@ impl Api {
 
 	/// Raw JSON from a BetterYTS endpoint (used by plugins).
 	pub fn get_json(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
+		self.get(path, query).map_err(String::from)
+	}
+
+	/// Like [`Api::get_json`], keeping the error's code (offline, rate-limited…).
+	pub fn get_typed(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, CoreError> {
 		self.get(path, query)
 	}
 
-	/// POSTs JSON (never cached). Error bodies are `{ error: "…" }` or `{ error: { message } }`.
+	/// POSTs JSON. Never cached and never retried (a repeat could apply the change twice).
 	pub fn post_json(&self, path: &str, body: &Value) -> Result<Value, String> {
-		let url = self.url(path, &[]);
-		match self.agent.post(&url).set("Content-Type", "application/json").send_string(&body.to_string()) {
-			Ok(res) => res.into_string().ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or_else(|| "BetterYTS sent something unexpected. Try again in a moment.".to_string()),
-			Err(ureq::Error::Status(code, res)) => {
-				let v: Option<Value> = res.into_string().ok().and_then(|t| serde_json::from_str(&t).ok());
-				let msg = v.as_ref().and_then(|v| v.get("error")).and_then(|e| e.as_str().map(String::from).or_else(|| e.get("message").and_then(Value::as_str).map(String::from)));
-				Err(msg.unwrap_or_else(|| format!("BetterYTS answered HTTP {code}")))
-			}
-			Err(ureq::Error::Transport(t)) => Err(format!("Can't reach BetterYTS ({})", t.kind())),
-		}
+		self.post_typed(path, body).map_err(String::from)
 	}
 
-	fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
+	pub fn post_typed(&self, path: &str, body: &Value) -> Result<Value, CoreError> {
+		let url = self.url(path, &[]);
+		let started = Instant::now();
+		let result = match self.agent.post(&url).timeout(timeout_for(path)).set("Content-Type", "application/json").send_string(&body.to_string()) {
+			Ok(res) => read_json(res),
+			Err(e) => Err(error_from(e)),
+		};
+		log_request("POST", &url, &result, started, false, 0);
+		result
+	}
+
+	fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, CoreError> {
 		let url = self.url(path, query);
+		let started = Instant::now();
 		if let Some(hit) = self.cache.lock().unwrap_or_else(|p| p.into_inner()).get(&url, Instant::now()) {
+			log_request("GET", &url, &Ok(Value::Null), started, true, 0);
 			return Ok(hit);
 		}
-		match self.agent.get(&url).call() {
-			Ok(res) => {
-				let ttl = cache_ttl(res.header("cache-control"));
-				let text = res.into_string().map_err(|e| format!("Couldn't read the response: {e}"))?;
-				let value: Value = serde_json::from_str(&text).map_err(|_| "BetterYTS sent something unexpected. Try again in a moment.".to_string())?;
-				if let Some(ttl) = ttl {
-					self.cache.lock().unwrap_or_else(|p| p.into_inner()).put(url, value.clone(), ttl, Instant::now());
+		let mut attempt = 0u32;
+		let result = loop {
+			let result = match self.agent.get(&url).timeout(timeout_for(path)).call() {
+				Ok(res) => {
+					let ttl = cache_ttl(res.header("cache-control"));
+					read_json(res).map(|v| (v, ttl))
 				}
-				Ok(value)
+				Err(e) => Err(error_from(e)),
+			};
+			match result {
+				Err(ref e) => match retry_delay(attempt, e, jitter_ms()) {
+					Some(wait) => {
+						attempt += 1;
+						std::thread::sleep(wait);
+					}
+					None => break result,
+				},
+				Ok(_) => break result,
 			}
-			Err(ureq::Error::Status(code, res)) => {
-				// The Worker answers {"error":{"status":…,"message":"…"}}.
-				let msg = res.into_string().ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| crate::google::error_message(&v));
-				Err(msg.unwrap_or_else(|| format!("BetterYTS returned HTTP {code}")))
+		};
+		let result = result.map(|(value, ttl)| {
+			if let Some(ttl) = ttl {
+				self.cache.lock().unwrap_or_else(|p| p.into_inner()).put(url.clone(), value.clone(), ttl, Instant::now());
 			}
-			Err(ureq::Error::Transport(t)) => Err(format!("Can't reach BetterYTS. Check your connection. ({})", t.kind())),
-		}
+			value
+		});
+		log_request("GET", &url, &result, started, false, attempt);
+		result
 	}
 
-	pub fn search(&self, query: &str, filter: Filter, page: Option<&str>) -> Result<Page, String> {
+	pub fn search(&self, query: &str, filter: Filter, page: Option<&str>) -> Result<Page, CoreError> {
 		let mut q = vec![("q", query)];
 		if let Some(t) = filter.api_type() {
 			q.push(("type", t));
@@ -263,7 +284,7 @@ impl Api {
 		Ok(Page { items: results(&v).iter().filter_map(model::item_from).collect(), next: model::s(&v, "next") })
 	}
 
-	pub fn suggest(&self, query: &str) -> Result<Vec<String>, String> {
+	pub fn suggest(&self, query: &str) -> Result<Vec<String>, CoreError> {
 		if query.trim().is_empty() {
 			return Ok(Vec::new());
 		}
@@ -271,7 +292,7 @@ impl Api {
 		Ok(v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).take(10).collect()).unwrap_or_default())
 	}
 
-	pub fn video(&self, id: &str) -> Result<Track, String> {
+	pub fn video(&self, id: &str) -> Result<Track, CoreError> {
 		let v = self.get(&format!("/api/video/{}", enc(id)), &[])?;
 		let author = model::s(&v, "author").unwrap_or_default();
 		let raw = model::s(&v, "title").unwrap_or_else(|| id.to_string());
@@ -290,7 +311,7 @@ impl Api {
 		})
 	}
 
-	pub fn playlist(&self, id: &str, page: Option<&str>) -> Result<CollectionPage, String> {
+	pub fn playlist(&self, id: &str, page: Option<&str>) -> Result<CollectionPage, CoreError> {
 		let v = self.get(&format!("/api/playlist/{}", enc(id)), &page.map(|p| vec![("page", p)]).unwrap_or_default())?;
 		let tracks = results(&v).iter().filter_map(|x| model::track_from(x, None)).collect();
 		let owner = model::s(&v, "owner").map(|o| crate::music::clean_artist(&o));
@@ -305,7 +326,7 @@ impl Api {
 		})
 	}
 
-	pub fn artist(&self, reference: &str, page: Option<&str>) -> Result<ArtistPage, String> {
+	pub fn artist(&self, reference: &str, page: Option<&str>) -> Result<ArtistPage, CoreError> {
 		let mut q = vec![("tab", "videos")];
 		if let Some(p) = page {
 			q.push(("page", p));
@@ -351,6 +372,133 @@ impl Api {
 		let tracks = dated.into_iter().map(|(_, _, t)| t).filter(|t| seen.insert(t.id.clone())).take(limit).collect();
 		(tracks, failed)
 	}
+}
+
+/// Largest response the core will read; the biggest real ones (long playlists) are well under 2 MB.
+pub const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+/// Retries for a failed GET (so at most 3 tries), and the longest `Retry-After` worth waiting for.
+pub const MAX_RETRIES: u32 = 2;
+const MAX_RETRY_WAIT_SECS: u64 = 5;
+
+/// Suggestions are typed live, so they give up quickly; everything else gets longer.
+pub fn timeout_for(path: &str) -> Duration {
+	if path.contains("/suggest") {
+		Duration::from_secs(6)
+	} else if path.contains("/search") || path.contains("/inworld") || path.contains("/rooms") {
+		Duration::from_secs(15)
+	} else {
+		Duration::from_secs(25)
+	}
+}
+
+/// How long to wait before trying a failed GET again, or None to give up. Backoff doubles from
+/// 300 ms with jitter; a server's `Retry-After` is honoured when it's short, and a long one means
+/// "not now", so the error goes to the user instead of a frozen screen.
+pub fn retry_delay(attempt: u32, e: &CoreError, jitter_ms: u64) -> Option<Duration> {
+	if attempt >= MAX_RETRIES || !e.retryable {
+		return None;
+	}
+	if let Some(secs) = e.retry_after {
+		return (secs <= MAX_RETRY_WAIT_SECS).then(|| Duration::from_millis(secs * 1000 + jitter_ms % 250));
+	}
+	Some(Duration::from_millis(300 * (1 << attempt) + jitter_ms % 200))
+}
+
+fn jitter_ms() -> u64 {
+	std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as u64 / 1000).unwrap_or(0)
+}
+
+fn request_id(res: &ureq::Response) -> Option<String> {
+	res.header("x-request-id").or_else(|| res.header("cf-ray")).map(|s| s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(64).collect())
+}
+
+/// Reads a body as JSON, refusing anything over [`MAX_RESPONSE_BYTES`].
+fn read_body(res: ureq::Response) -> Result<(Value, Option<String>), CoreError> {
+	use std::io::Read;
+	let rid = request_id(&res);
+	let mut buf = Vec::new();
+	res.into_reader().take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut buf).map_err(|e| CoreError::new(code::NETWORK, format!("Couldn't read the response: {e}")).with_request_id(rid.clone()))?;
+	if buf.len() as u64 > MAX_RESPONSE_BYTES {
+		return Err(CoreError::new(code::TOO_LARGE, "BetterYTS sent more than the app can read").with_request_id(rid));
+	}
+	let v = serde_json::from_slice(&buf).map_err(|_| CoreError::new(code::BAD_RESPONSE, "BetterYTS sent something unexpected. Try again in a moment.").with_request_id(rid.clone()))?;
+	Ok((v, rid))
+}
+
+/// A successful response. A v1 envelope (`{ ok, data, meta }`) is unwrapped to its data, so
+/// callers see the same shapes from versioned and legacy routes.
+fn read_json(res: ureq::Response) -> Result<Value, CoreError> {
+	let (v, rid) = read_body(res)?;
+	unwrap_envelope(v).map_err(|e| e.with_request_id(rid))
+}
+
+/// `{ ok: true, data, meta }` → data; `{ ok: false, error: { code, message, retryable } }` → error.
+/// Anything else (every legacy route) passes through untouched.
+pub fn unwrap_envelope(v: Value) -> Result<Value, CoreError> {
+	let Some(o) = v.as_object() else { return Ok(v) };
+	let enveloped = o.contains_key("ok") && o.keys().all(|k| matches!(k.as_str(), "ok" | "data" | "error" | "meta"));
+	if !enveloped {
+		return Ok(v);
+	}
+	let rid = v.pointer("/meta/requestId").and_then(Value::as_str).map(String::from);
+	if v.get("ok").and_then(Value::as_bool) == Some(true) {
+		return Ok(v.get("data").cloned().unwrap_or(Value::Null));
+	}
+	let err = v.get("error");
+	let message = err.and_then(|e| e.get("message").and_then(Value::as_str).or_else(|| e.as_str())).unwrap_or("BetterYTS couldn't do that").to_string();
+	let mut e = CoreError::new(err.and_then(|e| e.get("code")).and_then(Value::as_str).unwrap_or(code::ERROR), message);
+	if let Some(r) = err.and_then(|e| e.get("retryable")).and_then(Value::as_bool) {
+		e.retryable = r;
+	}
+	Err(e.with_request_id(rid))
+}
+
+/// A failed request → a typed error. Error bodies are `{ error: "…" }`, `{ error: { message } }`
+/// or the v1 envelope; the server's message is shown when it sent one.
+fn error_from(e: ureq::Error) -> CoreError {
+	match e {
+		ureq::Error::Status(status, res) => {
+			let retry_after = crate::error::parse_retry_after(res.header("retry-after"));
+			let rid = request_id(&res);
+			let body: Option<Value> = res.into_string().ok().and_then(|t| serde_json::from_str(&t).ok());
+			let err = body.as_ref().and_then(|v| v.get("error"));
+			let message = err
+				.and_then(|e| e.as_str().map(String::from).or_else(|| e.get("message").and_then(Value::as_str).map(String::from)))
+				.unwrap_or_else(|| match status {
+					429 => "BetterYTS is busy. Try again in a moment.".to_string(),
+					500..=599 => format!("BetterYTS is having trouble right now (HTTP {status})"),
+					_ => format!("BetterYTS returned HTTP {status}"),
+				});
+			let server_code = err.and_then(|e| e.get("code")).and_then(Value::as_str);
+			CoreError::from_status(status, message, server_code).with_retry_after(retry_after).with_request_id(rid)
+		}
+		ureq::Error::Transport(t) => {
+			let timed_out = t.kind() == ureq::ErrorKind::Io && t.to_string().to_lowercase().contains("timed out");
+			if timed_out {
+				CoreError::new(code::TIMEOUT, "BetterYTS took too long to answer. Check your connection.")
+			} else {
+				CoreError::new(code::NETWORK, format!("Can't reach BetterYTS. Check your connection. ({})", t.kind()))
+			}
+		}
+	}
+}
+
+fn log_request(method: &'static str, url: &str, result: &Result<Value, CoreError>, started: Instant, cached: bool, retries: u32) {
+	let (status, error, request_id) = match result {
+		Ok(_) => (200, None, None),
+		Err(e) => (e.status.unwrap_or(0), Some(e.code.clone()), e.request_id.clone()),
+	};
+	crate::diag::record(crate::diag::RequestRecord {
+		at: crate::library::Store::now(),
+		method,
+		route: crate::diag::route_template(crate::diag::path_of(url)),
+		status,
+		ms: started.elapsed().as_millis() as u64,
+		cached,
+		retries,
+		error,
+		request_id,
+	});
 }
 
 fn results(v: &Value) -> Vec<Value> {
@@ -429,6 +577,37 @@ mod tests {
 		assert!(age_seconds("5 hours ago") < age_seconds("1 day ago"));
 		assert_eq!(fmt_duration(214), "3:34");
 		assert_eq!(fmt_duration(3725), "1:02:05");
+	}
+
+	#[test]
+	fn retries_only_what_is_worth_retrying() {
+		let net = CoreError::new(code::NETWORK, "offline");
+		let d0 = retry_delay(0, &net, 0).unwrap();
+		let d1 = retry_delay(1, &net, 0).unwrap();
+		assert_eq!((d0.as_millis(), d1.as_millis()), (300, 600), "backoff doubles");
+		assert!(retry_delay(0, &net, 199).unwrap().as_millis() < 500, "jitter is bounded");
+		assert_eq!(retry_delay(MAX_RETRIES, &net, 0), None, "gives up after the last retry");
+		assert_eq!(retry_delay(0, &CoreError::from_status(404, "", None), 0), None, "a 404 won't fix itself");
+		assert_eq!(retry_delay(0, &CoreError::from_status(400, "", None), 0), None);
+		let soon = CoreError::from_status(429, "", None).with_retry_after(Some(2));
+		assert_eq!(retry_delay(0, &soon, 0).unwrap().as_millis(), 2000, "Retry-After is honoured");
+		let later = CoreError::from_status(429, "", None).with_retry_after(Some(120));
+		assert_eq!(retry_delay(0, &later, 0), None, "a long Retry-After goes to the user instead");
+		assert!(timeout_for("/api/suggest") < timeout_for("/api/search"));
+		assert!(timeout_for("/api/search") < timeout_for("/api/playlist/PL1"));
+	}
+
+	#[test]
+	fn v1_envelopes_unwrap_and_legacy_shapes_pass_through() {
+		use serde_json::json;
+		let ok = unwrap_envelope(json!({ "ok": true, "data": { "items": [1] }, "meta": { "requestId": "req_1", "apiVersion": "1" } })).unwrap();
+		assert_eq!(ok, json!({ "items": [1] }));
+		let err = unwrap_envelope(json!({ "ok": false, "error": { "code": "RATE_LIMITED", "message": "Please retry later.", "retryable": true }, "meta": { "requestId": "req_2" } })).unwrap_err();
+		assert_eq!((err.code.as_str(), err.message.as_str(), err.retryable, err.request_id.as_deref()), ("RATE_LIMITED", "Please retry later.", true, Some("req_2")));
+		// Legacy replies that happen to carry `ok` alongside other fields stay as they are.
+		let legacy = json!({ "ok": true, "playlists": 2, "tracks": 30 });
+		assert_eq!(unwrap_envelope(legacy.clone()).unwrap(), legacy);
+		assert_eq!(unwrap_envelope(json!([1, 2])).unwrap(), json!([1, 2]));
 	}
 
 	#[test]
