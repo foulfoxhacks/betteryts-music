@@ -15,6 +15,7 @@ pub mod diag;
 pub mod error;
 pub mod google;
 pub mod library;
+pub mod link;
 pub mod links;
 pub mod model;
 pub mod music;
