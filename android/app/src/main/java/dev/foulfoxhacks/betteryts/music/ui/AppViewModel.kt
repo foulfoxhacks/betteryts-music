@@ -662,19 +662,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         playPrefs.edit().putFloat("volume", volumeSlider).apply()
     }
 
-    fun setExponentialVolume(on: Boolean) {
+    fun updateExponentialVolume(on: Boolean) {
         exponentialVolume = on
         playPrefs.edit().putBoolean("expVolume", on).apply()
         player?.setVolumePercent(curve(volumeSlider))
     }
 
-    fun setSkipSilence(on: Boolean) {
+    fun updateSkipSilence(on: Boolean) {
         skipSilence = on
         player?.skipSilence = on
         playPrefs.edit().putBoolean("skipSilence", on).apply()
     }
 
-    fun setSkipDisliked(on: Boolean) {
+    fun updateSkipDisliked(on: Boolean) {
         skipDisliked = on
         playPrefs.edit().putBoolean("skipDisliked", on).apply()
     }
@@ -702,16 +702,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         playPrefs.edit().putInt("eqPreset", i).putString("eqLevels", eqLevels.joinToString(",")).apply()
     }
 
-    fun setCompressor(on: Boolean) {
+    fun updateCompressor(on: Boolean) {
         compressor = on
         playPrefs.edit().putBoolean("compressor", on).apply()
-        player?.fx?.setCompressor(on)
+        player?.fx?.updateCompressor(on)
     }
 
     private fun applyFx(fx: dev.foulfoxhacks.betteryts.music.player.AudioFx) {
         if (eqPreset >= 0) fx.usePreset(eqPreset) else eqLevels.forEachIndexed { b, mb -> if (b < fx.bands) fx.setLevel(b, mb) }
         fx.setEnabled(eqOn)
-        fx.setCompressor(compressor)
+        fx.updateCompressor(compressor)
     }
 
     /** Android's own output picker (speaker, Bluetooth, cast…), where the system offers one. */
@@ -1430,7 +1430,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         Brand.palette = withLook(Palettes.byId(settings.theme))
     }
 
-    fun setAlbumColors(on: Boolean) {
+    fun updateAlbumColors(on: Boolean) {
         albumColors = on
         look.edit().putBoolean("albumColors", on).apply()
         if (!on) albumAccent = null
@@ -1443,7 +1443,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         look.edit().putString("startTab", t.name).apply()
     }
 
-    fun setAutoplay(on: Boolean) {
+    fun updateAutoplay(on: Boolean) {
         autoplay = on
         look.edit().putBoolean("autoplay", on).apply()
         message = if (on) "Autoplay on: a station keeps the music going" else "Autoplay off: playback stops when the queue ends"

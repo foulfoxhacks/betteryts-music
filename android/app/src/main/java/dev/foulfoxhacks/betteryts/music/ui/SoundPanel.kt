@@ -60,7 +60,7 @@ fun SoundPanel(vm: AppViewModel, player: PlayerController, onDismiss: () -> Unit
                             Chip(label, false) { vm.setVolume(vm.volumeSlider + d) }
                         }
                     }
-                    PickRow("Exponential volume (finer control at low volume)", vm.exponentialVolume) { vm.setExponentialVolume(it) }
+                    PickRow("Exponential volume (finer control at low volume)", vm.exponentialVolume) { vm.updateExponentialVolume(it) }
                 } }
                 if (!local && track != null) {
                     item { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -83,12 +83,12 @@ fun SoundPanel(vm: AppViewModel, player: PlayerController, onDismiss: () -> Unit
                 item { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Songs on this phone", color = Brand.Paper, fontWeight = FontWeight.Bold)
                     Text("Equalizer, compressor and skip silence work on songs stored on the phone; YouTube's player can't be changed by apps.", color = Brand.Muted, fontSize = 12.sp)
-                    PickRow("Skip silences", vm.skipSilence) { vm.setSkipSilence(it) }
+                    PickRow("Skip silences", vm.skipSilence) { vm.updateSkipSilence(it) }
                     val fx = player.fx
                     if (fx == null) {
                         Text("Play a song from Library › On this phone to set up the equalizer.", color = Brand.Muted, fontSize = 12.sp)
                     } else {
-                        if (fx.compressorAvailable) PickRow("Volume leveller (compressor)", vm.compressor) { vm.setCompressor(it) }
+                        if (fx.compressorAvailable) PickRow("Volume leveller (compressor)", vm.compressor) { vm.updateCompressor(it) }
                         if (fx.available) {
                             PickRow("Equalizer", vm.eqOn) { vm.setEq(it) }
                             if (vm.eqOn) {

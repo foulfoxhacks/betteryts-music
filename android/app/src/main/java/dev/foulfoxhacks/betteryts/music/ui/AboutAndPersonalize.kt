@@ -76,8 +76,8 @@ fun PersonalizeSection(vm: AppViewModel) {
             }
         }
         Text("“A” uses the theme's own accent.", Modifier.padding(horizontal = 16.dp), color = Brand.Muted, fontSize = 11.sp)
-        SwitchRow("Album colours", "The accent follows the cover of the song that's playing.", vm.albumColors) { vm.setAlbumColors(it) }
-        SwitchRow("Autoplay", "When the queue ends, a station keeps the music going.", vm.autoplay) { vm.setAutoplay(it) }
+        SwitchRow("Album colours", "The accent follows the cover of the song that's playing.", vm.albumColors) { vm.updateAlbumColors(it) }
+        SwitchRow("Autoplay", "When the queue ends, a station keeps the music going.", vm.autoplay) { vm.updateAutoplay(it) }
         Text("Open the app on", Modifier.padding(start = 16.dp, top = 6.dp), color = Brand.Muted, fontSize = 13.sp)
         Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(Tab.Home to "Home", Tab.Explore to "Explore", Tab.Library to "Library").forEach { (t, label) ->
@@ -152,7 +152,7 @@ private val NOTICES = listOf(
 fun PlaybackExtras(vm: AppViewModel) {
     var token by remember { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SwitchRow("Skip songs you disliked", "Thumbs-down a song (player or ⋮ menu): stations never play it, and the queue skips it.", vm.skipDisliked) { vm.setSkipDisliked(it) }
+        SwitchRow("Skip songs you disliked", "Thumbs-down a song (player or ⋮ menu): stations never play it, and the queue skips it.", vm.skipDisliked) { vm.updateSkipDisliked(it) }
         if (vm.pluginOn("sponsorblock")) {
             Text("SponsorBlock skips", Modifier.padding(start = 16.dp, top = 8.dp), color = Brand.Paper, fontWeight = FontWeight.Bold)
             Text("Community-marked parts of videos to jump over. Each skip can be undone from the message.", Modifier.padding(horizontal = 16.dp), color = Brand.Muted, fontSize = 13.sp)

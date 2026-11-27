@@ -48,7 +48,7 @@ class AudioFx(sessionId: Int) {
     }
 
     /** Evens out loud and quiet songs: compress above -24 dB at 3:1, a little make-up gain, and a limiter. */
-    fun setCompressor(on: Boolean) {
+    fun updateCompressor(on: Boolean) {
         val d = dyn ?: return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
