@@ -301,6 +301,34 @@ private fun TitleRow(vm: AppViewModel, track: Track) {
 }
 
 private fun LazyListScope.upNext(vm: AppViewModel, q: dev.foulfoxhacks.betteryts.music.core.QueueState) {
+    val st = vm.station
+    if (st != null) {
+        item(key = "station-header") {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).card().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(AppIcons.Radio, null, Modifier.size(20.dp), tint = Brand.Gold)
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                        Text(st.label, color = Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Station · keeps going${if (st.blocked > 0) " · ${st.blocked} blocked" else ""}", color = Brand.Muted, fontSize = 12.sp)
+                    }
+                    if (!st.saved) BrandButton("Save", { vm.saveStation() }) else Text("Saved", color = Brand.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("familiar" to "Familiar", "balanced" to "Balanced", "discover" to "Discover").forEach { (mix, label) ->
+                        Chip(label, st.mix == mix) { vm.tuneStation(mix) }
+                    }
+                }
+            }
+        }
+    }
+    if (q.tracks.isNotEmpty()) {
+        item(key = "queue-actions") {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrandButton("Save as playlist", { vm.saveQueueAsPlaylist() }, icon = AppIcons.PlaylistAdd)
+                BrandButton("Clear", { vm.clearQueue() }, icon = AppIcons.Delete)
+            }
+        }
+    }
     itemsIndexed(q.tracks, key = { i, t -> "q-$i-" + t.id }) { i, t ->
         TrackRow(
             vm,
@@ -312,6 +340,8 @@ private fun LazyListScope.upNext(vm: AppViewModel, q: dev.foulfoxhacks.betteryts
                 add("Remove from queue" to { vm.removeFromQueue(i) })
                 if (i > 0) add("Move up" to { vm.moveInQueue(i, i - 1) })
                 if (i < q.tracks.lastIndex) add("Move down" to { vm.moveInQueue(i, i + 1) })
+                if (st != null && i != q.position) add("Not for this station" to { vm.notForStation(t, i) })
+                if (st != null) add("More like this" to { vm.moreLikeThis(t) })
             },
         )
     }

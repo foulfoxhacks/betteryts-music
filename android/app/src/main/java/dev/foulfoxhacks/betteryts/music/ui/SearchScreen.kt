@@ -93,7 +93,7 @@ fun SearchScreen(vm: AppViewModel, pad: PaddingValues) {
                 }
 
                 else -> when (val r = vm.results) {
-                    null -> EmptyNote("Search without the ads", "Find songs, artists and playlists. Results come from YouTube through BetterYTS, with ads and filler stripped out.")
+                    null -> RecentSearches(vm, pad) { q -> vm.submitSearch(q); done() }
                     Load.Loading -> Loading()
                     is Load.Failed -> ErrorBox(r.message) { vm.submitSearch(vm.submittedQuery) }
                     is Load.Ready -> Results(vm, r, pad)

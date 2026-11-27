@@ -69,6 +69,15 @@ class PlayerController(context: Context) {
     /** While the user drags the seek bar, ignore position updates from the player. */
     var seeking = false
 
+    /** One explicit lifecycle state, with a log of changes for Settings › Diagnostics. */
+    val machine = PlaybackStateMachine()
+    var status by mutableStateOf(PlayState.Idle)
+        private set
+
+    private fun move(to: PlayState, reason: String) {
+        if (machine.move(to, reason)) status = to
+    }
+
     private var startedFor: String? = null
     private val main = Handler(Looper.getMainLooper())
 
@@ -92,6 +101,7 @@ class PlayerController(context: Context) {
             if (!local) return
             val p = exoPlayer ?: return
             playing = isPlaying || (p.playWhenReady && p.playbackState == Player.STATE_BUFFERING)
+            if (isPlaying) move(PlayState.Playing, "device: playing") else if (p.playbackState == Player.STATE_READY) move(PlayState.Paused, "device: paused")
             val id = currentId
             if (isPlaying && id != null && startedFor != id) {
                 startedFor = id
@@ -104,7 +114,13 @@ class PlayerController(context: Context) {
             val p = exoPlayer ?: return
             buffering = state == Player.STATE_BUFFERING
             if (p.duration != C.TIME_UNSET) duration = p.duration / 1000f
+            when (state) {
+                Player.STATE_BUFFERING -> move(PlayState.Buffering, "device: buffering")
+                Player.STATE_READY -> if (!p.isPlaying) move(PlayState.Ready, "device: ready")
+                Player.STATE_IDLE -> move(PlayState.Idle, "device: idle")
+            }
             if (state == Player.STATE_ENDED) {
+                move(PlayState.Ended, "device: ended")
                 playing = false
                 currentId?.let { listener?.onEnded(it) }
             }
@@ -114,6 +130,7 @@ class PlayerController(context: Context) {
             if (!local) return
             Log.w(TAG, "native player error for $currentId", error)
             playing = false
+            move(PlayState.Failed, "device file error: ${error.errorCodeName}")
             listener?.onError(currentId, FILE_ERROR)
         }
     }
@@ -192,6 +209,7 @@ class PlayerController(context: Context) {
     private fun reportEnded(id: String, why: String) {
         if (endedFor == id) return
         endedFor = id
+        move(PlayState.Ended, "ended ($why)")
         Log.i(TAG, "ended ($why) $id")
         listener?.onEnded(id)
     }
@@ -216,6 +234,7 @@ class PlayerController(context: Context) {
         duration = 0f
         startedFor = null
         main.removeCallbacks(ticker)
+        move(PlayState.Loading, if (DeviceMusic.isLocal(id)) "load device file" else if (autoplay) "load" else "cue (paused)")
         if (DeviceMusic.isLocal(id)) {
             // Silence the embed first; the two players never play at once.
             if (!local) js("pause()")
@@ -250,6 +269,7 @@ class PlayerController(context: Context) {
 
     fun seek(seconds: Float) {
         position = seconds
+        if (status != PlayState.Idle && status != PlayState.Loading) move(PlayState.Seeking, "seek")
         if (local) exoPlayer?.seekTo((seconds * 1000).toLong()) else js("seek($seconds)")
     }
 
@@ -295,6 +315,10 @@ class PlayerController(context: Context) {
     fun onStart() = webView.onResume()
 
     fun destroy() {
+        // A destroyed player must never leave the app saying "playing".
+        playing = false
+        buffering = false
+        move(PlayState.Idle, "player destroyed")
         listener = null
         main.removeCallbacks(ticker)
         main.removeCallbacks(endWatchdog)
@@ -309,6 +333,7 @@ class PlayerController(context: Context) {
         fun onReady() = main.post {
             Log.i(TAG, "player ready")
             ready = true
+            if (status == PlayState.Idle) move(PlayState.Ready, "embed ready")
             // A speed chosen before the page finished loading never reached the player.
             js("speed($speed)")
         }
@@ -321,6 +346,12 @@ class PlayerController(context: Context) {
             // -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
             playing = state == 1 || state == 3
             buffering = state == 3
+            when (state) {
+                1 -> move(PlayState.Playing, "embed: playing")
+                2 -> move(PlayState.Paused, "embed: paused")
+                3 -> move(PlayState.Buffering, "embed: buffering")
+                5 -> move(PlayState.Ready, "embed: cued")
+            }
             val id = currentId
             if (state == 1 && id != null && startedFor != id) {
                 startedFor = id
@@ -333,6 +364,8 @@ class PlayerController(context: Context) {
         fun onError(code: Int) = main.post {
             if (local) return@post
             Log.w(TAG, "player error $code for $currentId")
+            playing = false
+            move(if (code == 101 || code == 150 || code == 152 || code == 153) PlayState.Blocked else PlayState.Failed, "embed error $code")
             listener?.onError(currentId, code)
         }
 

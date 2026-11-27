@@ -62,8 +62,11 @@ fun App(vm: AppViewModel, player: PlayerController) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm.message) {
         val m = vm.message ?: return@LaunchedEffect
+        val action = vm.messageAction
+        vm.messageAction = null
         snackbar.currentSnackbarData?.dismiss()
-        snackbar.showSnackbar(m)
+        val result = snackbar.showSnackbar(m, actionLabel = action?.first, duration = if (action != null) androidx.compose.material3.SnackbarDuration.Long else androidx.compose.material3.SnackbarDuration.Short)
+        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) action?.second?.invoke()
         if (vm.message == m) vm.message = null
     }
     BackHandler(enabled = vm.playerExpanded || vm.stack.isNotEmpty() || vm.tab != Tab.Home) { vm.back() }
@@ -130,9 +133,10 @@ fun App(vm: AppViewModel, player: PlayerController) {
             SnackbarHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = bottom + NAV_HEIGHT + (if (current != null && !expanded) MINI_HEIGHT else 0.dp) + 8.dp),
-            ) { data -> Snackbar(data, shape = RoundedCornerShape(14.dp), containerColor = Brand.Raised, contentColor = Brand.Paper) }
+            ) { data -> Snackbar(data, shape = RoundedCornerShape(14.dp), containerColor = Brand.Raised, contentColor = Brand.Paper, actionColor = Brand.Gold) }
 
             vm.playlistPickerFor?.let { AddToPlaylistDialog(vm, it) }
+            vm.pendingBackup?.let { BackupPreviewDialog(vm, it) }
             if (vm.accountOpen) AccountSheet(vm)
             if (vm.joinRoomDialog) {
                 JoinRoomDialog(onDismiss = { vm.joinRoomDialog = false }) { code ->
@@ -156,7 +160,9 @@ private fun Screens(vm: AppViewModel, pad: PaddingValues) {
         is Route.ArtistRoute -> ArtistScreen(vm, route, pad)
         is Route.CollectionRoute -> CollectionScreen(vm, route.collection, pad)
         is Route.PlaylistRoute -> UserPlaylistScreen(vm, route.id, pad)
+        is Route.SmartRoute -> SmartPlaylistScreen(vm, route, pad)
         Route.SettingsRoute -> SettingsScreen(vm, pad)
+        Route.DiagnosticsRoute -> DiagnosticsScreen(vm, pad)
         null -> when (vm.tab) {
             Tab.Home -> HomeScreen(vm, pad)
             Tab.Explore -> ExploreScreen(vm, pad)
