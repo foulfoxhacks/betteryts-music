@@ -128,6 +128,8 @@ pub struct Library {
 	pub smart: Vec<SavedSmart>,
 	/// Recent sends to VRChat worlds, newest first.
 	pub world_sends: Vec<WorldSend>,
+	/// Songs you disliked: never played by stations, skipped in the queue when that's on.
+	pub disliked: Vec<Track>,
 }
 
 fn now_ms() -> u64 {
@@ -435,6 +437,40 @@ impl Library {
 		self.create_playlist(&format!("{} (copy)", p.name), p.tracks)
 	}
 
+	// ---- dislikes and album actions ----
+
+	pub fn is_disliked(&self, id: &str) -> bool {
+		self.disliked.iter().any(|t| t.id == id)
+	}
+
+	/// Returns whether the song is now disliked. Disliking removes it from favourites.
+	pub fn toggle_dislike(&mut self, track: Track) -> bool {
+		if self.is_disliked(&track.id) {
+			self.disliked.retain(|t| t.id != track.id);
+			return false;
+		}
+		self.favorites.retain(|t| t.id != track.id);
+		self.disliked.insert(0, track);
+		self.disliked.truncate(MAX_FAVORITES);
+		true
+	}
+
+	/// Likes every song in a list (an album or playlist page). Returns how many were new.
+	pub fn like_many(&mut self, tracks: Vec<Track>) -> usize {
+		let mut added = 0;
+		for t in tracks.into_iter().rev() {
+			if self.favorites.len() >= MAX_FAVORITES {
+				break;
+			}
+			if !self.is_favorite(&t.id) {
+				self.disliked.retain(|d| d.id != t.id);
+				self.favorites.insert(0, t);
+				added += 1;
+			}
+		}
+		added
+	}
+
 	// ---- VRChat world sends ----
 
 	pub fn record_world_send(&mut self, mut send: WorldSend) {
@@ -695,6 +731,19 @@ mod tests {
 		assert_eq!(l.listening.days.len(), MAX_DAYS);
 		l.clear_stats();
 		assert!(l.stats.is_empty() && l.listening.days.is_empty());
+	}
+
+	#[test]
+	fn dislikes_and_like_many() {
+		let mut l = Library::default();
+		l.toggle_favorite(t("a"));
+		assert!(l.toggle_dislike(t("a")));
+		assert!(!l.is_favorite("a"), "disliking unlikes");
+		assert_eq!(l.like_many(vec![t("a"), t("b"), t("b")]), 2);
+		assert!(!l.is_disliked("a"), "liking undislikes");
+		assert_eq!(l.favorites.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["a", "b"], "keeps the list's order on top");
+		assert!(l.toggle_dislike(t("c")));
+		assert!(!l.toggle_dislike(t("c")));
 	}
 
 	#[test]

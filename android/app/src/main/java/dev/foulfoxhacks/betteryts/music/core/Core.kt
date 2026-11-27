@@ -258,7 +258,7 @@ object Core {
     data class Category(val id: String, val name: String, val description: String, val community: Boolean, val enabled: Boolean)
 
     data class Settings(
-        val theme: String = "ember",
+        val theme: String = "betteryts",
         val themes: List<Pair<String, String>> = emptyList(),
         val plugins: List<PluginInfo> = emptyList(),
         val categories: List<Category> = emptyList(),
@@ -266,6 +266,9 @@ object Core {
         /** Never shown: artists/channels (name, @handle or ID) and songs with these words. */
         val hiddenChannels: List<String> = emptyList(),
         val hiddenWords: List<String> = emptyList(),
+        val sponsorCategories: List<String> = listOf("music_offtopic"),
+        val sponsorCatalog: List<Pair<String, String>> = emptyList(),
+        val scrobbling: Boolean = false,
     ) {
         private fun compact(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
         fun hidesArtist(name: String, id: String?) = hiddenChannels.any { c -> compact(c).let { it.isNotEmpty() && (it == compact(name) || (id != null && it == compact(id))) } }
@@ -299,7 +302,12 @@ object Core {
         }
         val permissionText = o.optJSONArray("permissions").mapObjects { (it.str("id") ?: return@mapObjects null) to (it.str("text") ?: "") }.toMap()
         fun strings(key: String) = o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
-        return Settings(o.str("theme") ?: "ember", themes, plugins, categories, permissionText, strings("hiddenChannels"), strings("hiddenWords"))
+        return Settings(
+            o.str("theme") ?: "betteryts", themes, plugins, categories, permissionText, strings("hiddenChannels"), strings("hiddenWords"),
+            sponsorCategories = strings("sponsorCategories").ifEmpty { listOf("music_offtopic") },
+            sponsorCatalog = o.optJSONArray("sponsorCatalog").mapObjects { (it.str("id") ?: return@mapObjects null) to (it.str("name") ?: "") },
+            scrobbling = o.optBoolean("scrobbling"),
+        )
     }
 
     suspend fun settings() = settingsFrom(obj("settings.get"))
@@ -353,11 +361,38 @@ object Core {
         settingsFrom(obj("settings.hidden", args("channels" to org.json.JSONArray(channels), "words" to org.json.JSONArray(words))))
     suspend fun toggleHiddenArtist(name: String, id: String?) = settingsFrom(obj("settings.hideArtist", args("name" to name, "id" to id)))
 
-    data class Segment(val start: Float, val end: Float)
+    data class Segment(val start: Float, val end: Float, val category: String = "music_offtopic")
 
     suspend fun segments(id: String): List<Segment> {
         val a = request("plugin.segments", args("id" to id)) as? org.json.JSONArray
-        return a.mapObjects { Segment(it.optDouble("start").toFloat(), it.optDouble("end").toFloat()) }
+        return a.mapObjects { Segment(it.optDouble("start").toFloat(), it.optDouble("end").toFloat(), it.str("category") ?: "music_offtopic") }
+    }
+
+    suspend fun setSponsorCategories(ids: List<String>) = settingsFrom(obj("settings.sponsorCategories", args("categories" to org.json.JSONArray(ids))))
+
+    // ---- dislikes, album actions, sharing, scrobbling ----
+
+    /** Returns (library, disliked now). */
+    suspend fun toggleDislike(track: Track) = libraryOp("dislike", args("track" to track.toJson()))
+    suspend fun likeMany(tracks: List<Track>) = libraryOp("likeMany", args("tracks" to Track.array(tracks)))
+
+    /** A share link without tracking parameters, or null. */
+    suspend fun cleanShare(text: String): String? = request("share.clean", args("text" to text)) as? String
+
+    /** Checks and stores a ListenBrainz token; returns (user name, settings). */
+    suspend fun scrobbleConnect(token: String): Pair<String, Settings> {
+        val o = obj("scrobble.connect", args("token" to token))
+        return (o.str("user") ?: "") to settingsFrom(o.optJSONObject("settings") ?: JSONObject())
+    }
+
+    suspend fun scrobbleDisconnect() = settingsFrom(obj("scrobble.disconnect"))
+    suspend fun scrobbleNowPlaying(track: Track) {
+        request("scrobble.nowPlaying", args("track" to track.toJson()))
+    }
+
+    /** Submits a finished listen if it passes the scrobble rule (half the song or 4 minutes). */
+    suspend fun scrobbleListen(track: Track, startedAtMs: Long, listenedSeconds: Long) {
+        request("scrobble.listen", args("track" to track.toJson(), "startedAt" to startedAtMs, "listened" to listenedSeconds))
     }
 
     /** (likes, dislikes), or null when there's no vote data. */

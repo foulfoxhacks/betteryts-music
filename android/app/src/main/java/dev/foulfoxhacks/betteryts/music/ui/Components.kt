@@ -193,6 +193,8 @@ fun TrackMenuButton(vm: AppViewModel, track: Track, extraActions: List<Pair<Stri
             MenuItem("Add to queue", close) { vm.addToQueue(track) }
             MenuItem(if (vm.library.isFavorite(track.id)) "Remove from favorites" else "Add to favorites", close) { vm.toggleFavorite(track) }
             MenuItem("Add to playlist…", close) { vm.playlistPickerFor = track }
+            MenuItem(if (vm.library.isDisliked(track.id)) "Remove dislike" else "Dislike", close) { vm.toggleDislike(track) }
+            if (!track.isLocal) MenuItem("Share", close) { vm.share(track) }
             if (track.artistId != null) MenuItem("Go to artist", close) { vm.openArtist(track.artistId, track.artist) }
             extraActions.forEach { (label, action) -> MenuItem(label, close, action) }
         }

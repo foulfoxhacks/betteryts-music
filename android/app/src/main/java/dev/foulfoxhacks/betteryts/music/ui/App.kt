@@ -124,8 +124,12 @@ fun App(vm: AppViewModel, player: PlayerController) {
                 }
             }
             // Taps on the video: open the player when it's small, play/pause when it's big.
-            if (!pip) {
-                Box(Modifier.offset(x, y).size(w, h).clickable { if (expanded) vm.togglePlay() else vm.playerExpanded = true })
+            // Big player: double-tap the sides to skip ±10 s, swipe up/down on the right for volume
+            // and on the left for brightness (YouTube-style), with a short hint on the video.
+            if (!pip && !expanded) {
+                Box(Modifier.offset(x, y).size(w, h).clickable { vm.playerExpanded = true })
+            } else if (!pip) {
+                PlayerGestures(vm, Modifier.offset(x, y).size(w, h))
             }
         }
 
@@ -137,6 +141,7 @@ fun App(vm: AppViewModel, player: PlayerController) {
 
             vm.playlistPickerFor?.let { AddToPlaylistDialog(vm, it) }
             vm.pendingBackup?.let { BackupPreviewDialog(vm, it) }
+            if (vm.soundOpen) SoundPanel(vm, player) { vm.soundOpen = false }
             if (vm.accountOpen) AccountSheet(vm)
             if (vm.joinRoomDialog) {
                 JoinRoomDialog(onDismiss = { vm.joinRoomDialog = false }) { code ->

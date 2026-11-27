@@ -125,3 +125,28 @@ mod tests {
 		assert_eq!(resolve("https://youtube.com/watch?v=short"), None);
 	}
 }
+
+/// A share link without tracking: `https://music.youtube.com/watch?v=<id>` (plus `list=` for a
+/// playlist), whatever the input carried (`si`, `pp`, `feature`, `utm_*`…). None if there's no ID.
+pub fn clean_share(text: &str) -> Option<String> {
+	match resolve(text)? {
+		Link::Video { id } => Some(format!("https://music.youtube.com/watch?v={id}")),
+		Link::Playlist { id, .. } => Some(format!("https://music.youtube.com/playlist?list={id}")),
+		Link::Artist { id } if id.starts_with("UC") => Some(format!("https://music.youtube.com/channel/{id}")),
+		Link::Artist { id } => Some(format!("https://www.youtube.com/{id}")),
+		Link::Search { .. } => None,
+	}
+}
+
+#[cfg(test)]
+mod share_tests {
+	use super::*;
+
+	#[test]
+	fn share_links_lose_tracking() {
+		assert_eq!(clean_share("https://youtu.be/dQw4w9WgXcQ?si=AbCdEf123&t=4").as_deref(), Some("https://music.youtube.com/watch?v=dQw4w9WgXcQ"));
+		assert_eq!(clean_share("https://music.youtube.com/watch?v=dQw4w9WgXcQ&feature=share&utm_source=x").as_deref(), Some("https://music.youtube.com/watch?v=dQw4w9WgXcQ"));
+		assert!(clean_share("https://music.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG&si=zz").unwrap().ends_with("list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG"));
+		assert_eq!(clean_share("just some words"), None);
+	}
+}

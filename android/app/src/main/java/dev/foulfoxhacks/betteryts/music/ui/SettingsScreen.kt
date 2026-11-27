@@ -64,13 +64,16 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
 
             item { SectionHeader("Theme") }
             item {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Palettes.all.forEach { p ->
+                androidx.compose.foundation.lazy.LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(Palettes.all, key = { "theme-" + it.id }) { p ->
                         val name = vm.settings.themes.firstOrNull { it.first == p.id }?.second ?: p.id
-                        ThemeCard(p, name, selected = Brand.palette.id == p.id, Modifier.weight(1f)) { vm.setTheme(p.id) }
+                        ThemeCard(p, name, selected = Brand.palette.id == p.id, Modifier.width(150.dp)) { vm.setTheme(p.id) }
                     }
                 }
             }
+
+            item { SectionHeader("Personalize") }
+            item { PersonalizeSection(vm) }
 
             item { SectionHeader("Playback") }
             item {
@@ -81,6 +84,7 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
                     checked = vm.resumeEnabled,
                 ) { vm.setResume(it) }
             }
+            item { PlaybackExtras(vm) }
 
             item {
                 SectionHeader("Plugins")
@@ -132,6 +136,7 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             }
 
             item { SectionHeader("About") }
+            item { AboutSection(vm) }
             item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val context = androidx.compose.ui.platform.LocalContext.current

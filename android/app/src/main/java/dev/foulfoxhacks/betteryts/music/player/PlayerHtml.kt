@@ -18,7 +18,7 @@ object PlayerHtml {
 <body>
 <div id="p"></div>
 <script>
-  var player = null, ready = false, pending = null, rate = 1;
+  var player = null, ready = false, pending = null, rate = 1, vol = 100, cc = null;
 
   function load(id, start, autoplay) {
     if (!ready) { pending = [id, start, autoplay]; return; }
@@ -28,6 +28,27 @@ object PlayerHtml {
   function play() { if (ready) player.playVideo(); }
   function pause() { if (ready) player.pauseVideo(); }
   function seek(t) { if (ready) player.seekTo(t, true); }
+  function volume(v) { vol = v; if (ready) player.setVolume(v); }
+  // Captions: list the video's tracks (reported through Bridge.onCaptions), or show one / none.
+  function captionTracks() {
+    if (!ready) return;
+    try { player.loadModule('captions'); } catch (e) {}
+    setTimeout(function () {
+      var list = [];
+      try { list = player.getOption('captions', 'tracklist') || []; } catch (e) {}
+      Bridge.onCaptions(JSON.stringify(list.map(function (t) { return { code: t.languageCode, name: t.displayName || t.languageName || t.languageCode }; })));
+      if (!cc) { try { player.unloadModule('captions'); } catch (e) {} }
+    }, 700);
+  }
+  function captions(code) {
+    cc = code || null;
+    if (!ready) return;
+    try {
+      if (!cc) { player.unloadModule('captions'); return; }
+      player.loadModule('captions');
+      player.setOption('captions', 'track', { languageCode: cc });
+    } catch (e) { console.log('captions ' + e); }
+  }
   function speed(r) { rate = r; if (ready) { player.setPlaybackRate(r); console.log('speed ' + r + ' -> ' + player.getPlaybackRate()); } }
 
   window.onYouTubeIframeAPIReady = function () {
@@ -43,7 +64,7 @@ object PlayerHtml {
         },
         onStateChange: function (e) {
           // Each new video starts at 1x; put the chosen speed back.
-          if (e.data == 1) player.setPlaybackRate(rate);
+          if (e.data == 1) { player.setPlaybackRate(rate); player.setVolume(vol); if (cc) captions(cc); }
           Bridge.onState(e.data);
         },
         onError: function (e) { Bridge.onError(e.data); }

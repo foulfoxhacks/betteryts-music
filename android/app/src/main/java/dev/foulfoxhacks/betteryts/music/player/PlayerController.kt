@@ -62,6 +62,40 @@ class PlayerController(context: Context) {
     var currentId by mutableStateOf<String?>(null)
         private set
 
+    /** 0–100, applied to both players. */
+    var volume by mutableFloatStateOf(100f)
+        private set
+
+    /** Caption tracks of the current video (code, name); filled by [listCaptions]. */
+    var captionTracks by mutableStateOf<List<Pair<String, String>>>(emptyList())
+        private set
+    var captionLanguage by mutableStateOf<String?>(null)
+        private set
+
+    /** Equalizer and compressor for songs stored on the phone (YouTube's player can't be reached). */
+    var fx: AudioFx? = null
+        private set
+
+    /** Skip silent stretches in songs stored on the phone. */
+    var skipSilence = false
+        set(value) {
+            field = value
+            exoPlayer?.skipSilenceEnabled = value
+        }
+
+    fun setVolumePercent(v: Float) {
+        volume = v.coerceIn(0f, 100f)
+        exoPlayer?.volume = volume / 100f
+        js("volume(${volume.toInt()})")
+    }
+
+    fun listCaptions() = js("captionTracks()")
+
+    fun chooseCaptions(code: String?) {
+        captionLanguage = code
+        js("captions(${if (code == null) "null" else JSONObject.quote(code)})")
+    }
+
     /** Playback speed chosen by the user. Each new video starts at 1x, so the page re-applies it. */
     var speed by mutableFloatStateOf(1f)
         private set
@@ -93,8 +127,18 @@ class PlayerController(context: Context) {
         .build()
         .also {
             it.addListener(exoListener)
+            // A session of our own, so the equalizer only touches this app's device-file audio.
+            val sid = (appContext.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager).generateAudioSessionId()
+            it.audioSessionId = sid
+            it.volume = volume / 100f
+            it.skipSilenceEnabled = skipSilence
+            fx = AudioFx(sid)
+            onFxReady?.invoke(fx!!)
             exoPlayer = it
         }
+
+    /** Called once the equalizer exists (the first time a device file plays), to apply saved settings. */
+    var onFxReady: ((AudioFx) -> Unit)? = null
 
     private val exoListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -230,6 +274,7 @@ class PlayerController(context: Context) {
         watchdogArmed = false
         endedFor = null
         currentId = id
+        captionTracks = emptyList()
         position = startSeconds
         duration = 0f
         startedFor = null
@@ -322,6 +367,8 @@ class PlayerController(context: Context) {
         listener = null
         main.removeCallbacks(ticker)
         main.removeCallbacks(endWatchdog)
+        fx?.release()
+        fx = null
         exoPlayer?.release()
         exoPlayer = null
         webView.destroy()
@@ -358,6 +405,14 @@ class PlayerController(context: Context) {
                 listener?.onStartedPlaying(id)
             }
             if (state == 0 && id != null) reportEnded(id, "embed")
+        }
+
+        @JavascriptInterface
+        fun onCaptions(json: String) = main.post {
+            captionTracks = runCatching {
+                val a = org.json.JSONArray(json)
+                (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { o -> o.optString("code").takeIf(String::isNotBlank)?.let { it to o.optString("name", it) } } }
+            }.getOrDefault(emptyList())
         }
 
         @JavascriptInterface

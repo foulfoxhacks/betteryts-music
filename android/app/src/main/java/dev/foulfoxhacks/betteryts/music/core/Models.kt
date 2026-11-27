@@ -240,8 +240,11 @@ data class Library(
     /** "playlist:<id>", "artist:<id>", "station:<id>", "smart:<id>". */
     val pinned: List<String> = emptyList(),
     val worldSends: List<WorldSend> = emptyList(),
+    val disliked: List<Track> = emptyList(),
 ) {
     fun isPinned(key: String) = key in pinned
+    private val dislikedIds: Set<String> by lazy { disliked.mapTo(HashSet()) { it.id } }
+    fun isDisliked(id: String) = id in dislikedIds
 
     private val favoriteIds: Set<String> by lazy { favorites.mapTo(HashSet()) { it.id } }
     private val followedIds: Set<String> by lazy { followed.flatMapTo(HashSet()) { listOfNotNull(it.id, it.handle) } }
@@ -260,6 +263,7 @@ data class Library(
             searches = o.optJSONArray("searches").mapObjects { it.str("query") },
             pinned = o.optJSONArray("pinned")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).takeIf(String::isNotBlank) } } ?: emptyList(),
             worldSends = o.optJSONArray("worldSends").mapObjects(WorldSend::from),
+            disliked = Track.list(o.optJSONArray("disliked")),
         )
     }
 }

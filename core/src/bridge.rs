@@ -92,7 +92,8 @@ fn known_artists(lib: &crate::library::Library) -> std::collections::HashSet<Str
 fn station_step(station: Station, step: impl FnOnce(&mut Station, &crate::stations::Live, &std::collections::HashSet<String>, &dyn Fn(&Track) -> bool) -> Result<crate::stations::Outcome, String>) -> Result<Value, CoreError> {
 	let (api, known, settings) = with_state(|s| Ok((s.api.clone(), known_artists(&s.store.lib), s.settings.settings.clone())))?;
 	let mut station = station;
-	let hidden = |t: &Track| settings.hides_track(t);
+	let disliked: std::collections::HashSet<String> = with_state(|s| Ok(s.store.lib.disliked.iter().map(|t| t.id.clone()).collect()))?;
+	let hidden = |t: &Track| settings.hides_track(t) || disliked.contains(&t.id);
 	let outcome = step(&mut station, &crate::stations::Live { api: &api }, &known, &hidden)?;
 	with_state(|s| {
 		s.stations.stations.set_current(station);
@@ -598,7 +599,60 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 			let v = api().get_json("/api/rooms/new", &[])?;
 			Ok(json!({ "code": v.get("code"), "hostKey": v.get("hostKey") }))
 		}
-		"plugin.segments" => to_value(plugins::segments(&api(), &arg::<String>(a, "id")?)?),
+		"plugin.segments" => {
+			let cats = with_state(|s| Ok(s.settings.settings.sponsor_categories.clone()))?;
+			to_value(plugins::segments(&api(), &arg::<String>(a, "id")?, &cats)?)
+		}
+		"settings.sponsorCategories" => {
+			let cats: Vec<String> = arg(a, "categories")?;
+			with_state(|s| {
+				s.settings.settings.sponsor_categories = plugins::clean_categories(&cats);
+				s.settings.save()?;
+				Ok(s.settings.settings.view())
+			})
+		}
+
+		// ---- dislikes, album actions, sharing ----
+		"library.dislike" => {
+			let t: Track = arg(a, "track")?;
+			library_op(|l| l.toggle_dislike(t))
+		}
+		"library.likeMany" => {
+			let ts: Vec<Track> = arg(a, "tracks")?;
+			library_op(|l| l.like_many(ts))
+		}
+		"share.clean" => Ok(json!(links::clean_share(&arg::<String>(a, "text")?))),
+
+		// ---- scrobbling (ListenBrainz, opt-in; the token stays in the settings file) ----
+		"scrobble.connect" => {
+			let token: String = arg(a, "token")?;
+			let user = crate::scrobble::validate(&token)?;
+			with_state(|s| {
+				s.settings.settings.listenbrainz_token = Some(token.trim().to_string());
+				s.settings.save()?;
+				Ok(json!({ "user": user, "settings": s.settings.settings.view() }))
+			})
+		}
+		"scrobble.disconnect" => with_state(|s| {
+			s.settings.settings.listenbrainz_token = None;
+			s.settings.save()?;
+			Ok(s.settings.settings.view())
+		}),
+		"scrobble.nowPlaying" | "scrobble.listen" => {
+			let t: Track = arg(a, "track")?;
+			let Some(token) = with_state(|s| Ok(s.settings.settings.listenbrainz_token.clone()))? else { return Ok(json!({ "sent": false })) };
+			let at = if method == "scrobble.listen" {
+				let listened: u64 = arg(a, "listened")?;
+				if !crate::scrobble::should_scrobble(t.duration_seconds, listened) {
+					return Ok(json!({ "sent": false }));
+				}
+				Some(arg::<Option<u64>>(a, "startedAt")?.unwrap_or_else(|| Store::now()) / 1000)
+			} else {
+				None
+			};
+			crate::scrobble::submit(&token, &t, at)?;
+			Ok(json!({ "sent": true }))
+		}
 		"plugin.dislikes" => Ok(plugins::dislikes(&api(), &arg::<String>(a, "id")?)?),
 		"plugin.lyrics" => to_value(plugins::lyrics(&arg::<Track>(a, "track")?)?),
 		"plugin.protv" => {
