@@ -116,6 +116,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           name: BetterYTS Music ${{ inputs.tag || github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
