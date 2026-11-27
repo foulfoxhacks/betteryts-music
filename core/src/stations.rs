@@ -51,6 +51,8 @@ pub enum Mix {
 	#[default]
 	Balanced,
 	Discover,
+	/// YouTube's songs, reordered by genre, tempo, key and your taste (crate::recommend).
+	Smart,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -163,7 +165,7 @@ impl Station {
 			.filter(|t| !t.live && !self.blocked_tracks.contains(&t.id) && !self.blocked_artists.contains(&artist_key(t)) && !hidden(t))
 			.filter(|t| seen.insert(t.id.clone()))
 			.collect();
-		let out = if self.mix == Mix::Balanced {
+		let out = if self.mix == Mix::Balanced || self.mix == Mix::Smart {
 			// YouTube's own order.
 			fresh
 		} else {
@@ -179,7 +181,7 @@ impl Station {
 
 	fn tuned(&self, known: Vec<Track>, new: Vec<Track>) -> Vec<Track> {
 		match self.mix {
-			Mix::Balanced | Mix::Familiar => known.into_iter().chain(new).collect(),
+			Mix::Balanced | Mix::Smart | Mix::Familiar => known.into_iter().chain(new).collect(),
 			// At most one familiar artist for every three new ones, and only after them.
 			Mix::Discover => {
 				let keep = new.len() / 3;

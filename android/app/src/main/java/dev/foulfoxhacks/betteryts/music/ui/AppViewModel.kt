@@ -516,6 +516,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         message = when (mix) {
             "familiar" -> "More of the artists you know"
             "discover" -> "More artists you haven't heard"
+            "smart" -> "Smart: ordered by genre, tempo, key and your taste"
             else -> "A balanced mix"
         }
     }
@@ -1849,6 +1850,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             } catch (e: Exception) {
                 Load.Failed(e.message ?: "Couldn't read the music on this phone")
             }
+        }
+    }
+
+    /** "Analyse tempo & key" for songs on the phone: progress text, or null when idle. */
+    var analyzing by mutableStateOf<String?>(null)
+        private set
+
+    /** Decodes each device song (in the core) to find its tempo and key, for Smart stations and mixes. */
+    fun analyzeDeviceSongs() {
+        val songs = (deviceSongs as? Load.Ready)?.value.orEmpty()
+        if (songs.isEmpty() || analyzing != null) return
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            ready.join()
+            var done = 0
+            var failed = 0
+            for (t in songs) {
+                analyzing = "Analysing ${done + 1} of ${songs.size}…"
+                val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        ctx.contentResolver.openFileDescriptor(DeviceMusic.uri(t.id), "r")?.use { pfd ->
+                            Core.analyzeFile(t.id, "/proc/self/fd/${pfd.fd}")
+                        }
+                    }.isSuccess
+                }
+                if (ok) done++ else failed++
+            }
+            analyzing = null
+            message = "Analysed $done songs${if (failed > 0) " ($failed couldn't be read)" else ""}. Smart stations now use their tempo and key."
         }
     }
 

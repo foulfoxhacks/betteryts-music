@@ -170,6 +170,18 @@ object Core {
     suspend fun stationStop() = Stations.from(obj("station.stop"))
     suspend fun stations() = Stations.from(obj("stations.list"))
 
+    // ---- audio analysis (songs on the device) ----
+
+    /** Tempo and key of a device file; [path] may be /proc/self/fd/N for a content URI. Returns "120 BPM · A minor (8A)". */
+    suspend fun analyzeFile(id: String, path: String): String {
+        val o = obj("analysis.file", args("id" to id, "path" to path))
+        val bpm = if (o.has("bpm") && !o.isNull("bpm")) "${o.optDouble("bpm").toInt()} BPM" else null
+        val key = o.str("key")?.let { k -> o.str("camelot")?.let { "$k ($it)" } ?: k }
+        return listOfNotNull(bpm, key).joinToString(" · ")
+    }
+
+    suspend fun analyzedCount(): Int = (request("analysis.count") as? Number)?.toInt() ?: 0
+
     // ---- diagnostics (core/src/diag.rs) ----
 
     suspend fun diagnostics() = NetworkDiagnostics.from(obj("diagnostics.get"))

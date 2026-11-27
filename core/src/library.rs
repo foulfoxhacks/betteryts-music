@@ -130,7 +130,11 @@ pub struct Library {
 	pub world_sends: Vec<WorldSend>,
 	/// Songs you disliked: never played by stations, skipped in the queue when that's on.
 	pub disliked: Vec<Track>,
+	/// Tempo/key/energy of analysed songs (songs on the device), by track ID.
+	pub features: std::collections::HashMap<String, crate::analysis::Features>,
 }
+
+pub const MAX_FEATURES: usize = 5000;
 
 fn now_ms() -> u64 {
 	SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)

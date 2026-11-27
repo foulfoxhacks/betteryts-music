@@ -9,6 +9,7 @@
 //!
 //! Playback itself is not here: the app plays through YouTube's official embedded player.
 
+pub mod analysis;
 pub mod api;
 pub mod bridge;
 pub mod diag;
@@ -23,6 +24,7 @@ pub mod smart;
 pub mod plugins;
 pub mod queue;
 pub mod radio;
+pub mod recommend;
 pub mod scrobble;
 pub mod spotify;
 pub mod stations;

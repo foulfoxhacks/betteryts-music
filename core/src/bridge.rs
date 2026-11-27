@@ -69,6 +69,7 @@ fn library_view(lib: &crate::library::Library) -> Result<Value, CoreError> {
 	if let Some(o) = v.as_object_mut() {
 		o.remove("stats");
 		o.remove("listening");
+		o.remove("features");
 	}
 	Ok(v)
 }
@@ -94,14 +95,27 @@ fn station_step(station: Station, step: impl FnOnce(&mut Station, &crate::statio
 	let mut station = station;
 	let disliked: std::collections::HashSet<String> = with_state(|s| Ok(s.store.lib.disliked.iter().map(|t| t.id.clone()).collect()))?;
 	let hidden = |t: &Track| settings.hides_track(t) || disliked.contains(&t.id);
-	let outcome = step(&mut station, &crate::stations::Live { api: &api }, &known, &hidden)?;
+	let mut outcome = step(&mut station, &crate::stations::Live { api: &api }, &known, &hidden)?;
+	// Smart mix: reorder the page by genre, tempo, key and taste, and say why.
+	let mut why = serde_json::Map::new();
+	if station.mix == crate::stations::Mix::Smart && !outcome.tracks.is_empty() {
+		let seed = Track { id: station.radio_from.clone().unwrap_or_default(), title: station.seed.title.clone(), artist: String::new(), artist_id: None, thumbnail: None, duration: None, duration_seconds: None, live: false, plays: None };
+		let (features, taste) = with_state(|s| Ok((s.store.lib.features.clone(), crate::recommend::taste(&s.store.lib))))?;
+		let ranked = crate::recommend::rerank(&seed, std::mem::take(&mut outcome.tracks), &features, &taste);
+		for (t, w) in ranked {
+			if !w.reasons.is_empty() {
+				why.insert(t.id.clone(), json!(w.reasons));
+			}
+			outcome.tracks.push(t);
+		}
+	}
 	with_state(|s| {
 		s.stations.stations.set_current(station);
 		s.stations.stations.sync_saved();
 		s.stations.save()?;
 		let all = &s.stations.stations;
 		let view = all.current.as_ref().map(|c| crate::stations::view(c, all));
-		Ok(json!({ "station": to_value(view)?, "tracks": to_value(&outcome.tracks)?, "recovered": outcome.recovered, "filtered": outcome.filtered }))
+		Ok(json!({ "station": to_value(view)?, "tracks": to_value(&outcome.tracks)?, "recovered": outcome.recovered, "filtered": outcome.filtered, "why": why }))
 	})
 }
 
@@ -658,6 +672,32 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 		"plugin.protv" => {
 			let name: String = arg::<Option<String>>(a, "name")?.unwrap_or_default();
 			Ok(Value::String(plugins::protv_playlist(&name, &arg::<Vec<Track>>(a, "tracks")?)))
+		}
+
+		// ---- audio analysis (songs on the device only) and recommendations ----
+		"analysis.file" => {
+			let (id, path): (String, String) = (arg(a, "id")?, arg(a, "path")?);
+			let (pcm, rate) = crate::analysis::decode_file(&path, 45.0)?;
+			let f = crate::analysis::analyze(&pcm, rate);
+			let out = json!({ "bpm": f.bpm, "key": f.key.map(|k| k.name()), "camelot": f.key.map(|k| { let (n, l) = k.camelot(); format!("{n}{l}") }), "keyConfidence": f.key_confidence, "energy": f.energy });
+			with_state(|s| {
+				let lib = &mut s.store.lib;
+				if lib.features.len() >= crate::library::MAX_FEATURES && !lib.features.contains_key(&id) {
+					return Ok(out.clone());
+				}
+				lib.features.insert(id.clone(), f);
+				s.store.save()?;
+				Ok(out.clone())
+			})
+		}
+		"analysis.get" => {
+			let id: String = arg(a, "id")?;
+			with_state(|s| Ok(s.store.lib.features.get(&id).map(|f| json!({ "bpm": f.bpm, "key": f.key.map(|k| k.name()), "camelot": f.key.map(|k| { let (n, l) = k.camelot(); format!("{n}{l}") }), "energy": f.energy })).unwrap_or(Value::Null)))
+		}
+		"analysis.count" => with_state(|s| Ok(json!(s.store.lib.features.len()))),
+		"recommend.genres" => {
+			let t: Track = arg(a, "track")?;
+			Ok(json!(crate::recommend::genres(&t.title, &t.artist, &arg::<Option<Vec<String>>>(a, "tags")?.unwrap_or_default())))
 		}
 
 		// ---- diagnostics (no queries, tokens or IDs; see diag.rs) ----

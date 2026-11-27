@@ -320,7 +320,7 @@ private fun LazyListScope.upNext(vm: AppViewModel, q: dev.foulfoxhacks.betteryts
                     if (!st.saved) BrandButton("Save", { vm.saveStation() }) else Text("Saved", color = Brand.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("familiar" to "Familiar", "balanced" to "Balanced", "discover" to "Discover").forEach { (mix, label) ->
+                    listOf("familiar" to "Familiar", "balanced" to "Balanced", "discover" to "Discover", "smart" to "Smart").forEach { (mix, label) ->
                         Chip(label, st.mix == mix) { vm.tuneStation(mix) }
                     }
                 }

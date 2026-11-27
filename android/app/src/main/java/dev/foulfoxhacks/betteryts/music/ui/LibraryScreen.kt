@@ -145,6 +145,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                     item { EmptyNote(if (q.isEmpty()) "No music on this phone" else "No matches", if (q.isEmpty()) "Copy songs into the Music folder and they show up here." else "No song on this phone matches \"$q\".") }
                 } else {
                     item { PlayShuffle(onPlay = { vm.playTracks(device, 0) }, onShuffle = { vm.playTracks(device, 0, shuffle = true) }, extra = { BrandButton("Rescan", { vm.loadDeviceSongs() }, icon = AppIcons.Refresh) }) }
+                    item { BrandButton(vm.analyzing ?: "Analyse tempo & key", { vm.analyzeDeviceSongs() }, Modifier.padding(horizontal = 16.dp), icon = AppIcons.Insights, enabled = vm.analyzing == null) }
                     itemsIndexed(device, key = { _, t -> "d-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(device, i) }) }
                 }
             }
