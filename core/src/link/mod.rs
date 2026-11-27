@@ -14,6 +14,7 @@
 //! This module is sans-IO: it turns incoming datagrams and the clock into outgoing datagrams and
 //! events, which makes it deterministic to test. [`udp`] runs it on a real socket.
 
+pub mod session;
 pub mod udp;
 pub mod wire;
 

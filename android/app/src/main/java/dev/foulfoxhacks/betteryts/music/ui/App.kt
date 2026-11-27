@@ -142,6 +142,7 @@ fun App(vm: AppViewModel, player: PlayerController) {
             vm.playlistPickerFor?.let { AddToPlaylistDialog(vm, it) }
             vm.pendingBackup?.let { BackupPreviewDialog(vm, it) }
             if (vm.soundOpen) SoundPanel(vm, player) { vm.soundOpen = false }
+            if (vm.lanOpen) LanSheet(vm) { vm.lanOpen = false }
             if (vm.accountOpen) AccountSheet(vm)
             if (vm.joinRoomDialog) {
                 JoinRoomDialog(onDismiss = { vm.joinRoomDialog = false }) { code ->

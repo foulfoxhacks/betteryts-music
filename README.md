@@ -7,10 +7,16 @@ account, and everything stays on the phone.
 ## How it's built
 
 ```
-core/       Rust: BetterYTS API client, title/artist clean-up, play queue, on-device library
+core/       Rust: API client, queue, library, stations, smart playlists, analysis, BTLink
 android/    Kotlin + Jetpack Compose UI; plays through YouTube's official embedded player
+desktop/    Linux and Windows app (Tauri 2) on the same Rust core
 scripts/    build-core.ps1 cross-compiles core/ into android/app/src/main/jniLibs
+docs/       google-setup.md, btlink.md (local-network sync protocol)
 ```
+
+Every push, pull request and manual run of `.github/workflows/build.yml` tests the core and
+builds Android (sideload + Play APKs), Linux (`.deb`, AppImage) and Windows (`.msi`, `setup.exe`)
+packages, attached to the run with SHA-256 checksums.
 
 - **Rust core** (`core/`). Everything that isn't UI: HTTP (ureq + rustls, no OpenSSL),
   mapping YouTube results into songs/artists/playlists, turning
@@ -56,6 +62,14 @@ builds read a local test server instead (`http://10.0.2.2:5175/update.json`).
   114×64 dp); if the app goes to the Play Store, make the mini player bigger, or pause when the
   player is collapsed, and check the PiP size on small devices.
 - Uploads whose owners block embedding (player errors 101/150) are skipped with a message.
+
+## Desktop (Linux, Windows)
+
+`desktop/` is a Tauri 2 app around the same core: search, library, stations, queue and the
+official embedded player (served from a localhost origin so embeds load), with media keys via MPRIS
+(Linux) and the Windows media overlay. Build: install Rust and Node, plus on Linux
+`libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`, then
+`cd desktop && npx @tauri-apps/cli@2 build`.
 
 ## Build
 
@@ -129,6 +143,19 @@ subscriptions (read-only). Sign-in runs in the browser through the BetterYTS Wor
 doesn't need Google Play services. Setup and the Google Cloud steps: [docs/google-setup.md](docs/google-setup.md).
 
 ## Also in the app
+
+- **Stations**: radio from a song, artist, playlist or your own playlist, tuned Familiar /
+  Balanced / Discover / Smart (genre, tempo, key and your taste), saved and recent stations.
+- **Library tools**: smart playlists (and your own rules), pins, insights, multi-select editing,
+  merge, remove repeats, recent searches, backup preview with Replace.
+- **Sound**: precise/exponential volume, captions, output picker; for songs on the phone an
+  equalizer, compressor, skip silences and tempo/key analysis.
+- **Link nearby devices** (BTLink): encrypted, millisecond-level sync between devices on the same
+  Wi-Fi, by QR or invite link. See [docs/btlink.md](docs/btlink.md).
+- **Scrobbling** to ListenBrainz, SponsorBlock categories, dislikes, Like all, clean share links,
+  player gestures, launcher shortcuts, themes (BetterYTS, AMOLED, Ember, Mello) and accents.
+- **Settings › Diagnostics**: player state history and recent requests, copyable without personal
+  data. Privacy statement in Settings › About and [PRIVACY.md](PRIVACY.md).
 
 - **Spotify**: import public playlists by link, or Sign in with Spotify for private playlists and
   Liked Songs (PKCE; the token is used for one import and not saved).

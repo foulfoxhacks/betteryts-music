@@ -27,6 +27,12 @@ struct State {
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
+/// The app's data folder (from `init`), for files outside the State such as the link identity.
+static DATA_DIR: Mutex<Option<String>> = Mutex::new(None);
+
+fn data_dir() -> std::path::PathBuf {
+	std::path::PathBuf::from(DATA_DIR.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| std::env::temp_dir().to_string_lossy().into_owned()))
+}
 
 fn state() -> MutexGuard<'static, Option<State>> {
 	STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -133,6 +139,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 	match method {
 		"init" => {
 			let dir: String = arg(a, "dataDir")?;
+			*DATA_DIR.lock().unwrap_or_else(|p| p.into_inner()) = Some(dir.clone());
 			let base = opt_str(a, "baseUrl").unwrap_or(DEFAULT_BASE).to_string();
 			let mut guard = state();
 			let queue = guard.take().map(|s| s.queue).unwrap_or_default();
@@ -672,6 +679,24 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 		"plugin.protv" => {
 			let name: String = arg::<Option<String>>(a, "name")?.unwrap_or_default();
 			Ok(Value::String(plugins::protv_playlist(&name, &arg::<Vec<Track>>(a, "tracks")?)))
+		}
+
+		// ---- BTLink: encrypted local-network sync (link/) ----
+		"lan.host" => Ok(crate::link::session::host(&data_dir(), &arg::<Option<String>>(a, "name")?.unwrap_or_default())?),
+		"lan.join" => Ok(crate::link::session::join(&data_dir(), &arg::<String>(a, "invite")?, &arg::<Option<String>>(a, "name")?.unwrap_or_default())?),
+		"lan.send" => {
+			let cmd: Value = arg(a, "command")?;
+			crate::link::session::send(&cmd, arg::<Option<i64>>(a, "leadMs")?.unwrap_or(120))?;
+			Ok(Value::Null)
+		}
+		"lan.lock" => {
+			crate::link::session::lock(arg(a, "locked")?);
+			Ok(Value::Null)
+		}
+		"lan.poll" => Ok(crate::link::session::poll()),
+		"lan.leave" => {
+			crate::link::session::leave();
+			Ok(Value::Null)
 		}
 
 		// ---- audio analysis (songs on the device only) and recommendations ----

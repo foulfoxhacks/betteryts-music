@@ -851,8 +851,156 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private fun playCurrent() {
         val t = queue.current ?: return
         endedId = null
+        if (lanHost && !t.isLocal) {
+            // Everyone cues the song now and starts it together a moment later.
+            val start = resumePosition(t)
+            player?.load(t.id, start, autoplay = false)
+            lanBroadcast(JSONObject().put("type", "custom").put("data", JSONObject().put("title", t.title).put("artist", t.artist).toString()), leadMs = 0) {}
+            lanBroadcast(JSONObject().put("type", "load").put("id", t.id).put("position", start.toDouble()), leadMs = 0) {}
+            lanBroadcast(lanCommand("play", start), leadMs = 700) { player?.play() }
+            onTrackChanged(t)
+            return
+        }
         player?.load(t.id, resumePosition(t))
         onTrackChanged(t)
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Link nearby devices (BTLink): one phone hosts, others on the same Wi-Fi follow it to the
+    // millisecond. Encrypted; only devices with the invite (QR or link) can join.
+    // ---------------------------------------------------------------------------------------
+
+    data class LanState(val role: String, val invite: String?, val locked: Boolean, val peers: List<Pair<String, String>>, val rttMs: Double?)
+
+    var lan by mutableStateOf<LanState?>(null)
+        private set
+    var lanFingerprint by mutableStateOf<String?>(null)
+        private set
+    var lanOpen by mutableStateOf(false)
+    private var lanTrack by mutableStateOf<Track?>(null)
+    private var lanJob: Job? = null
+    private val lanHost get() = lan?.role == "host"
+    private val lanMember get() = lan?.role == "member"
+    private val lanMain = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun lanCommand(type: String, position: Float) = JSONObject().put("type", type).put("position", position.toDouble())
+
+    fun hostLan() = io {
+        if (room != null) throw CoreException("Leave the Listen Together room first")
+        val (invite, fp) = Core.lanHost(displayName)
+        lanFingerprint = fp
+        lan = LanState("host", invite, false, emptyList(), null)
+        startLanPolling()
+        message = "Hosting on this network. Share the invite."
+    }
+
+    fun joinLan(invite: String) = io {
+        if (room != null) throw CoreException("Leave the Listen Together room first")
+        lanFingerprint = Core.lanJoin(invite.trim(), displayName)
+        lan = LanState("member", null, false, emptyList(), null)
+        player?.pause()
+        startLanPolling()
+        message = "Connecting to the host…"
+    }
+
+    fun leaveLan() = io {
+        lanJob?.cancel()
+        lanMain.removeCallbacksAndMessages(null)
+        Core.lanLeave()
+        lan = null
+        lanTrack = null
+        message = "Left the link"
+    }
+
+    fun setLanLocked(locked: Boolean) = io { Core.lanLock(locked) }
+
+    /** Share text for the invite: the deep link (opens the app) plus the raw invite. */
+    fun lanInviteLink(invite: String) = "betterytsmusic://link?i=" + android.net.Uri.encode(invite)
+
+    private fun lanBroadcast(cmd: JSONObject, leadMs: Int = 150, local: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                Core.lanSend(cmd, leadMs)
+            } catch (_: CoreException) {
+            }
+        }
+        if (leadMs <= 0) local() else lanMain.postDelayed({ local() }, leadMs.toLong())
+    }
+
+    private fun lanRequest(cmd: JSONObject) {
+        viewModelScope.launch {
+            try {
+                Core.lanSend(cmd, 150)
+            } catch (e: CoreException) {
+                message = e.message
+            }
+        }
+    }
+
+    private fun startLanPolling() {
+        lanJob?.cancel()
+        lanJob = viewModelScope.launch {
+            while (true) {
+                val o = try { Core.lanPoll() } catch (_: CoreException) { break }
+                if (!o.optBoolean("active")) {
+                    lan = null
+                    break
+                }
+                val peers = o.optJSONArray("peers").let { a -> (0 until (a?.length() ?: 0)).mapNotNull { i -> a?.optJSONObject(i)?.let { (it.optString("name")) to it.optString("fingerprint") } } }
+                lan = LanState(o.optString("role"), o.optString("invite").ifBlank { null }, o.optBoolean("locked"), peers, if (o.isNull("rttMs")) null else o.optDouble("rttMs"))
+                val events = o.optJSONArray("events")
+                for (i in 0 until (events?.length() ?: 0)) events?.optJSONObject(i)?.let(::onLanEvent)
+                delay(30)
+            }
+        }
+    }
+
+    private fun onLanEvent(e: JSONObject) {
+        when (e.optString("type")) {
+            "connected" -> message = if (lanHost) "${e.optString("name")} joined" else "Linked with ${e.optString("name")}"
+            "disconnected" -> message = "${e.optString("name").ifBlank { "A device" }} left"
+            "denied" -> message = "The host has locked the controls"
+            "control" -> {
+                val cmd = e.optJSONObject("command") ?: return
+                val inMs = e.optLong("inMs")
+                if (lanMember) applyLanCommand(cmd, inMs) else hostApplyRequest(cmd)
+            }
+        }
+    }
+
+    /** Member: do what the host said, at the moment it said (late commands catch up by seeking). */
+    private fun applyLanCommand(cmd: JSONObject, inMs: Long) {
+        val p = player ?: return
+        val pos = cmd.optDouble("position", 0.0).toFloat()
+        val late = (-inMs).coerceAtLeast(0) / 1000f
+        val run: () -> Unit = when (cmd.optString("type")) {
+            "custom" -> {
+                runCatching { JSONObject(cmd.optString("data")) }.getOrNull()?.let { m -> lanTrack = Track(lanTrack?.id ?: "", m.optString("title"), m.optString("artist")) }
+                return
+            }
+            "load" -> {
+                val id = cmd.optString("id")
+                lanTrack = (lanTrack ?: Track(id, "Linked", "")).copy(id = id)
+                p.load(id, pos, autoplay = false)
+                return
+            }
+            "play" -> ({ p.seek(pos + late); p.play() })
+            "pause" -> ({ p.pause(); p.seek(pos) })
+            "seek" -> ({ p.seek(pos + if (p.playing) late else 0f) })
+            "stop" -> ({ p.pause() })
+            else -> return
+        }
+        if (inMs > 0) lanMain.postDelayed(run, inMs) else run()
+    }
+
+    /** Host: a member asked for play/pause/seek (the room isn't locked, or the core would refuse). */
+    private fun hostApplyRequest(cmd: JSONObject) {
+        val p = player ?: return
+        when (cmd.optString("type")) {
+            "play" -> if (!p.playing) togglePlay()
+            "pause" -> if (p.playing) togglePlay()
+            "seek" -> seek(cmd.optDouble("position", 0.0).toFloat())
+        }
     }
 
     fun playTracks(tracks: List<Track>, start: Int, shuffle: Boolean = false) {
@@ -887,6 +1035,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun togglePlay() {
         val p = player ?: return
+        if (lanMember) {
+            lanRequest(lanCommand(if (p.playing) "pause" else "play", p.position))
+            return
+        }
+        if (lanHost && p.currentId != null) {
+            val play = !p.playing
+            lanBroadcast(lanCommand(if (play) "play" else "pause", p.position)) { if (play) p.play() else p.pause() }
+            return
+        }
         if (room != null) {
             roomSend(if (roomState?.playing == true) "pause" else "play", "position" to p.position)
             return
@@ -1048,6 +1205,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun seek(seconds: Float) {
+        if (lanMember) {
+            lanRequest(lanCommand("seek", seconds))
+            return
+        }
+        if (lanHost) lanBroadcast(lanCommand("seek", seconds), leadMs = 60) {}
         if (room != null) {
             roomSend("seek", "position" to seconds)
         } else {
@@ -2113,7 +2275,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     /** What's playing: the room's video while in a room, otherwise the local queue's. */
     val nowPlaying: Track?
-        get() = if (room != null) roomState?.video?.let { Track(it.id, it.title, "Listening together") } else queue.current
+        get() = when {
+            room != null -> roomState?.video?.let { Track(it.id, it.title, "Listening together") }
+            lan?.role == "member" -> lanTrack
+            else -> queue.current
+        }
 
     val canSkip: Boolean get() = if (room != null) roomState?.queue?.isNotEmpty() == true else queue.hasNext
 

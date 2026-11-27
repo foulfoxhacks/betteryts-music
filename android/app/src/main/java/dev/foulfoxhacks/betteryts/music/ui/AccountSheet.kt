@@ -100,6 +100,7 @@ fun AccountSheet(vm: AppViewModel) {
 
             SheetRow(AppIcons.Library, "Your library") { close(); vm.libraryTab = "all"; vm.selectTab(Tab.Library) }
             SheetRow(AppIcons.History, "History") { close(); vm.libraryTab = "history"; vm.selectTab(Tab.Library) }
+            SheetRow(AppIcons.Together, "Link nearby devices") { close(); vm.lanOpen = true }
             SheetRow(AppIcons.Recap, "Your recap") { showRecap = !showRecap }
             if (showRecap) Recap(vm)
             if (vm.pluginOn("together")) {
