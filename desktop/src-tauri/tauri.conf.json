@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BetterYTS Music",
+  "version": "0.10.0",
+  "identifier": "dev.foulfoxhacks.betteryts.music.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "nsis", "msi"],
+    "category": "Music",
+    "shortDescription": "Ad-free music client for the BetterYTS ecosystem",
+    "longDescription": "BetterYTS Music for Linux and Windows: search, library, stations and smart playlists, played through YouTube's official embedded player.",
+    "publisher": "FoulFoxHacks",
+    "copyright": "FoulFoxHacks",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.ico"],
+    "linux": { "deb": { "depends": [] } }
+  }
+}
