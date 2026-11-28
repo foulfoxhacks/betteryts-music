@@ -161,7 +161,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: betteryts-{linux,windows}-*
+          pattern: betteryts-*
           merge-multiple: true
       - name: Desktop checksums
         run: |
