@@ -80,6 +80,17 @@ fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
 }
 
 pub fn export(lib: &Library, settings: &Settings, app_version: &str, now_ms: u64) -> Value {
+	export_with_queue(lib, settings, app_version, now_ms, &[])
+}
+
+/// The website's SponsorBlock setting is a map of category → skip; the app keeps a list.
+fn skip_map(settings: &Settings) -> Value {
+	let chosen = crate::plugins::clean_categories(&settings.sponsor_categories);
+	Value::Object(crate::plugins::SPONSOR_CATEGORIES.iter().map(|(id, _)| (id.to_string(), json!(chosen.iter().any(|c| c == id)))).collect())
+}
+
+/// Like [`export`], with the play queue (the website restores it on import).
+pub fn export_with_queue(lib: &Library, settings: &Settings, app_version: &str, now_ms: u64, queue: &[Track]) -> Value {
 	json!({
 		"format": FORMAT,
 		// The shared format's version: the website refuses newer ones, so app-only data goes in
@@ -96,6 +107,7 @@ pub fn export(lib: &Library, settings: &Settings, app_version: &str, now_ms: u64
 		"settings": {
 			"hiddenChannels": settings.hidden_channels.join("\n"),
 			"hiddenWords": settings.hidden_words.join(", "),
+			"skip": skip_map(settings),
 		},
 		"library": {
 			"favorites": lib.favorites.iter().map(video).collect::<Vec<_>>(),
@@ -110,7 +122,7 @@ pub fn export(lib: &Library, settings: &Settings, app_version: &str, now_ms: u64
 				"items": p.tracks.iter().map(video).collect::<Vec<_>>(),
 				"createdAt": p.created_at,
 			})).collect::<Vec<_>>(),
-			"queue": [],
+			"queue": queue.iter().filter(|t| is_video_id(&t.id)).take(300).map(video).collect::<Vec<_>>(),
 			"subscriptions": lib.followed.iter().filter(|a| is_channel_id(&a.id)).map(|a| json!({
 				"id": a.id, "title": a.name, "handle": a.handle, "avatar": a.thumbnail,
 			})).collect::<Vec<_>>(),
@@ -318,6 +330,11 @@ pub fn import_with(text: &str, store: &mut Store, settings: &mut Settings, mode:
 		let channels: Vec<String> = settings.hidden_channels.iter().cloned().chain(split("hiddenChannels")).collect();
 		let words: Vec<String> = settings.hidden_words.iter().cloned().chain(split("hiddenWords")).collect();
 		settings.set_hidden(&channels, &words);
+		// SponsorBlock: the website's { category: skip } map, for categories the app knows.
+		if let Some(skip) = s.get("skip").and_then(Value::as_object) {
+			let on: Vec<String> = skip.iter().filter(|(_, v)| v.as_bool() == Some(true)).map(|(k, _)| k.clone()).collect();
+			settings.sponsor_categories = crate::plugins::clean_categories(&on);
+		}
 	}
 	for p in list(&v, "plugins") {
 		if validate_manifest(&p.to_string()).is_ok() && settings.install(&p.to_string()).is_ok() {
@@ -423,6 +440,22 @@ mod tests {
 	}
 
 	/// Every historical shape the app has written must keep importing.
+	#[test]
+	fn website_settings_and_queue_round_trip() {
+		let mut s = Settings::default();
+		s.sponsor_categories = vec!["sponsor".into(), "intro".into()];
+		let text = export_with_queue(&Library::default(), &s, "0.10.0", 0, &[t("dQw4w9WgXcQ"), serde_json::from_value(json!({ "id": "local:4", "title": "x", "artist": "y" })).unwrap()]).to_string();
+		let v: Value = serde_json::from_str(&text).unwrap();
+		assert_eq!(v["settings"]["skip"]["sponsor"], true);
+		assert_eq!(v["settings"]["skip"]["music_offtopic"], false);
+		assert_eq!(v["library"]["queue"].as_array().unwrap().len(), 1, "phone songs aren't exported");
+		// The website's map: hook/exclusive_access are site-only and ignored by the app.
+		let site = json!({ "format": "betteryts-backup", "version": 1, "settings": { "skip": { "selfpromo": true, "hook": true, "sponsor": false } }, "library": {} });
+		let mut st = Settings::default();
+		import(&site.to_string(), &mut Store::in_memory(), &mut st).unwrap();
+		assert_eq!(st.sponsor_categories, ["selfpromo"]);
+	}
+
 	#[test]
 	fn historical_backups_still_import() {
 		// App 0.8–0.9.4: version 1, no "app" or "music" sections.

@@ -524,7 +524,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 		}
 		"backup.export" => {
 			let version: String = arg::<Option<String>>(a, "appVersion")?.unwrap_or_default();
-			with_state(|s| Ok(json!({ "text": crate::backup::export(&s.store.lib, &s.settings.settings, &version, Store::now()).to_string() })))
+			with_state(|s| Ok(json!({ "text": crate::backup::export_with_queue(&s.store.lib, &s.settings.settings, &version, Store::now(), &s.queue.view().tracks).to_string() })))
 		}
 		"backup.preview" => {
 			let text: String = arg(a, "text")?;
