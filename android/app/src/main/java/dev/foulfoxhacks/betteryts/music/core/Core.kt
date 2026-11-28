@@ -170,6 +170,42 @@ object Core {
     suspend fun stationStop() = Stations.from(obj("station.stop"))
     suspend fun stations() = Stations.from(obj("stations.list"))
 
+    // ---- BTLink: encrypted local-network sync (core/src/link) ----
+
+    /** Starts hosting; returns (invite, this device's fingerprint). */
+    suspend fun lanHost(name: String): Pair<String, String> {
+        val o = obj("lan.host", args("name" to name))
+        return (o.str("invite") ?: "") to (o.str("fingerprint") ?: "")
+    }
+
+    /** Joins from an invite (raw or a betterytsmusic://link?i=… link); returns this device's fingerprint. */
+    suspend fun lanJoin(invite: String, name: String): String = obj("lan.join", args("invite" to invite, "name" to name)).str("fingerprint") ?: ""
+
+    suspend fun lanSend(command: JSONObject, leadMs: Int) {
+        request("lan.send", args("command" to command, "leadMs" to leadMs))
+    }
+
+    suspend fun lanLock(locked: Boolean) {
+        request("lan.lock", args("locked" to locked))
+    }
+
+    suspend fun lanPoll(): JSONObject = obj("lan.poll")
+    suspend fun lanLeave() {
+        request("lan.leave")
+    }
+
+    // ---- audio analysis (songs on the device) ----
+
+    /** Tempo and key of a device file; [path] may be /proc/self/fd/N for a content URI. Returns "120 BPM · A minor (8A)". */
+    suspend fun analyzeFile(id: String, path: String): String {
+        val o = obj("analysis.file", args("id" to id, "path" to path))
+        val bpm = if (o.has("bpm") && !o.isNull("bpm")) "${o.optDouble("bpm").toInt()} BPM" else null
+        val key = o.str("key")?.let { k -> o.str("camelot")?.let { "$k ($it)" } ?: k }
+        return listOfNotNull(bpm, key).joinToString(" · ")
+    }
+
+    suspend fun analyzedCount(): Int = (request("analysis.count") as? Number)?.toInt() ?: 0
+
     // ---- diagnostics (core/src/diag.rs) ----
 
     suspend fun diagnostics() = NetworkDiagnostics.from(obj("diagnostics.get"))

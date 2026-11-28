@@ -120,7 +120,25 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                     item { EmptyNote(if (q.isEmpty()) "No liked songs yet" else "No matches", if (q.isEmpty()) "Tap ♡ in the player, or ⋮ → Add to favorites on any song." else "Nothing in your liked songs matches \"$q\".") }
                 } else {
                     item { PlayShuffle(onPlay = { vm.playTracks(songs, 0) }, onShuffle = { vm.playTracks(songs, 0, shuffle = true) }) }
-                    itemsIndexed(songs, key = { _, t -> "fav-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(songs, i) }) }
+                    if (dev.foulfoxhacks.betteryts.music.ui.theme.Brand.look.libraryGrid) {
+                        // Grid view (Settings › Customize): covers three to a row.
+                        songs.chunked(3).forEachIndexed { r, row ->
+                            item(key = "fav-row-$r") {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    row.forEach { t ->
+                                        Column(Modifier.weight(1f).clickable { vm.playTracks(songs, songs.indexOf(t)) }) {
+                                            RemoteImage(t.art, Modifier.fillMaxWidth().aspectRatio(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)))
+                                            Text(t.title, Modifier.padding(top = 6.dp), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(t.artist, color = Brand.Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                                }
+                            }
+                        }
+                    } else {
+                        itemsIndexed(songs, key = { _, t -> "fav-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(songs, i) }) }
+                    }
                 }
             }
 
@@ -145,6 +163,7 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                     item { EmptyNote(if (q.isEmpty()) "No music on this phone" else "No matches", if (q.isEmpty()) "Copy songs into the Music folder and they show up here." else "No song on this phone matches \"$q\".") }
                 } else {
                     item { PlayShuffle(onPlay = { vm.playTracks(device, 0) }, onShuffle = { vm.playTracks(device, 0, shuffle = true) }, extra = { BrandButton("Rescan", { vm.loadDeviceSongs() }, icon = AppIcons.Refresh) }) }
+                    item { BrandButton(vm.analyzing ?: "Analyse tempo & key", { vm.analyzeDeviceSongs() }, Modifier.padding(horizontal = 16.dp), icon = AppIcons.Insights, enabled = vm.analyzing == null) }
                     itemsIndexed(device, key = { _, t -> "d-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(device, i) }) }
                 }
             }

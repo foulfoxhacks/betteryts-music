@@ -237,6 +237,7 @@ private fun PlayerTopBar(vm: AppViewModel, track: Track) {
             IconButton(onClick = { menu = true }) { Icon(AppIcons.More, "More", tint = Brand.Paper) }
             DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = Brand.Raised) {
                 DropdownMenuItem(text = { Text("Sound, captions, output…", color = Brand.Paper) }, onClick = { menu = false; vm.soundOpen = true })
+                DropdownMenuItem(text = { Text(if (vm.lan == null) "Link nearby devices…" else "Linked devices…", color = Brand.Paper) }, onClick = { menu = false; vm.lanOpen = true })
                 DropdownMenuItem(text = { Text("Add to playlist…", color = Brand.Paper) }, onClick = { menu = false; vm.playlistPickerFor = track })
                 if (!track.isLocal) DropdownMenuItem(text = { Text("Share", color = Brand.Paper) }, onClick = { menu = false; vm.share(track) })
                 if (vm.pluginOn("together") && vm.room == null) {
@@ -320,7 +321,7 @@ private fun LazyListScope.upNext(vm: AppViewModel, q: dev.foulfoxhacks.betteryts
                     if (!st.saved) BrandButton("Save", { vm.saveStation() }) else Text("Saved", color = Brand.Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("familiar" to "Familiar", "balanced" to "Balanced", "discover" to "Discover").forEach { (mix, label) ->
+                    listOf("familiar" to "Familiar", "balanced" to "Balanced", "discover" to "Discover", "smart" to "Smart").forEach { (mix, label) ->
                         Chip(label, st.mix == mix) { vm.tuneStation(mix) }
                     }
                 }

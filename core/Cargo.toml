@@ -16,6 +16,8 @@ serde_json = "1"
 # rustls + webpki-roots: no OpenSSL to cross-compile, and the same TLS stack on every ABI.
 ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
 jni = "0.21"
+snow = "0.9"
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "aac", "isomp4", "ogg", "vorbis", "wav", "pcm"] }
 
 [profile.release]
 opt-level = "s"

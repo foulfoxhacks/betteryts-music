@@ -85,6 +85,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             var intro by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(coldStart) }
             BetterYTSTheme {
+                // Light themes need dark status/navigation bar icons.
+                val light = dev.foulfoxhacks.betteryts.music.ui.theme.Brand.palette.light
+                androidx.compose.runtime.LaunchedEffect(light) {
+                    val c = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                    c.isAppearanceLightStatusBars = light
+                    c.isAppearanceLightNavigationBars = light
+                }
                 // Keep the PiP play/pause button in step with the page.
                 LaunchedEffect(player.playing) { refreshPipParams() }
                 App(vm, player)
@@ -114,6 +121,12 @@ class MainActivity : ComponentActivity() {
             return
         }
         val data = intent?.data
+        // A BTLink invite: betterytsmusic://link?i=btlink:1:…
+        if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "betterytsmusic" && data.host == "link") {
+            vm.joinLan(data.toString())
+            vm.lanOpen = true
+            return
+        }
         if (intent?.action == Intent.ACTION_VIEW && data?.scheme == "betterytsmusic" && data.host == "oauth" && data.path == "/spotify") {
             vm.finishSpotifySignIn(data)
             return

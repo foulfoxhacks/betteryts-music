@@ -254,6 +254,7 @@ pub fn validate_manifest(text: &str) -> Result<CommunityPlugin, String> {
 pub const THEMES: &[(&str, &str)] = &[
 	("betteryts", "BetterYTS · Open // Watch // Build"),
 	("amoled", "AMOLED · true black"),
+	("daylight", "Daylight · light"),
 	("ember", "Ember · akasammythepuppy"),
 	("mello", "Mello · Mello Zone"),
 ];

@@ -57,6 +57,7 @@ sealed interface Route {
     data class SmartRoute(val id: String, val name: String) : Route
     data object SettingsRoute : Route
     data object DiagnosticsRoute : Route
+    data object CustomizeRoute : Route
 }
 
 /** A home shelf filled from a search, so Home has music on day one. */
@@ -516,6 +517,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         message = when (mix) {
             "familiar" -> "More of the artists you know"
             "discover" -> "More artists you haven't heard"
+            "smart" -> "Smart: ordered by genre, tempo, key and your taste"
             else -> "A balanced mix"
         }
     }
@@ -850,8 +852,156 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     private fun playCurrent() {
         val t = queue.current ?: return
         endedId = null
+        if (lanHost && !t.isLocal) {
+            // Everyone cues the song now and starts it together a moment later.
+            val start = resumePosition(t)
+            player?.load(t.id, start, autoplay = false)
+            lanBroadcast(JSONObject().put("type", "custom").put("data", JSONObject().put("title", t.title).put("artist", t.artist).toString()), leadMs = 0) {}
+            lanBroadcast(JSONObject().put("type", "load").put("id", t.id).put("position", start.toDouble()), leadMs = 0) {}
+            lanBroadcast(lanCommand("play", start), leadMs = 700) { player?.play() }
+            onTrackChanged(t)
+            return
+        }
         player?.load(t.id, resumePosition(t))
         onTrackChanged(t)
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Link nearby devices (BTLink): one phone hosts, others on the same Wi-Fi follow it to the
+    // millisecond. Encrypted; only devices with the invite (QR or link) can join.
+    // ---------------------------------------------------------------------------------------
+
+    data class LanState(val role: String, val invite: String?, val locked: Boolean, val peers: List<Pair<String, String>>, val rttMs: Double?)
+
+    var lan by mutableStateOf<LanState?>(null)
+        private set
+    var lanFingerprint by mutableStateOf<String?>(null)
+        private set
+    var lanOpen by mutableStateOf(false)
+    private var lanTrack by mutableStateOf<Track?>(null)
+    private var lanJob: Job? = null
+    private val lanHost get() = lan?.role == "host"
+    private val lanMember get() = lan?.role == "member"
+    private val lanMain = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun lanCommand(type: String, position: Float) = JSONObject().put("type", type).put("position", position.toDouble())
+
+    fun hostLan() = io {
+        if (room != null) throw CoreException("Leave the Listen Together room first")
+        val (invite, fp) = Core.lanHost(displayName)
+        lanFingerprint = fp
+        lan = LanState("host", invite, false, emptyList(), null)
+        startLanPolling()
+        message = "Hosting on this network. Share the invite."
+    }
+
+    fun joinLan(invite: String) = io {
+        if (room != null) throw CoreException("Leave the Listen Together room first")
+        lanFingerprint = Core.lanJoin(invite.trim(), displayName)
+        lan = LanState("member", null, false, emptyList(), null)
+        player?.pause()
+        startLanPolling()
+        message = "Connecting to the host…"
+    }
+
+    fun leaveLan() = io {
+        lanJob?.cancel()
+        lanMain.removeCallbacksAndMessages(null)
+        Core.lanLeave()
+        lan = null
+        lanTrack = null
+        message = "Left the link"
+    }
+
+    fun setLanLocked(locked: Boolean) = io { Core.lanLock(locked) }
+
+    /** Share text for the invite: the deep link (opens the app) plus the raw invite. */
+    fun lanInviteLink(invite: String) = "betterytsmusic://link?i=" + android.net.Uri.encode(invite)
+
+    private fun lanBroadcast(cmd: JSONObject, leadMs: Int = 150, local: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                Core.lanSend(cmd, leadMs)
+            } catch (_: CoreException) {
+            }
+        }
+        if (leadMs <= 0) local() else lanMain.postDelayed({ local() }, leadMs.toLong())
+    }
+
+    private fun lanRequest(cmd: JSONObject) {
+        viewModelScope.launch {
+            try {
+                Core.lanSend(cmd, 150)
+            } catch (e: CoreException) {
+                message = e.message
+            }
+        }
+    }
+
+    private fun startLanPolling() {
+        lanJob?.cancel()
+        lanJob = viewModelScope.launch {
+            while (true) {
+                val o = try { Core.lanPoll() } catch (_: CoreException) { break }
+                if (!o.optBoolean("active")) {
+                    lan = null
+                    break
+                }
+                val peers = o.optJSONArray("peers").let { a -> (0 until (a?.length() ?: 0)).mapNotNull { i -> a?.optJSONObject(i)?.let { (it.optString("name")) to it.optString("fingerprint") } } }
+                lan = LanState(o.optString("role"), o.optString("invite").ifBlank { null }, o.optBoolean("locked"), peers, if (o.isNull("rttMs")) null else o.optDouble("rttMs"))
+                val events = o.optJSONArray("events")
+                for (i in 0 until (events?.length() ?: 0)) events?.optJSONObject(i)?.let(::onLanEvent)
+                delay(30)
+            }
+        }
+    }
+
+    private fun onLanEvent(e: JSONObject) {
+        when (e.optString("type")) {
+            "connected" -> message = if (lanHost) "${e.optString("name")} joined" else "Linked with ${e.optString("name")}"
+            "disconnected" -> message = "${e.optString("name").ifBlank { "A device" }} left"
+            "denied" -> message = "The host has locked the controls"
+            "control" -> {
+                val cmd = e.optJSONObject("command") ?: return
+                val inMs = e.optLong("inMs")
+                if (lanMember) applyLanCommand(cmd, inMs) else hostApplyRequest(cmd)
+            }
+        }
+    }
+
+    /** Member: do what the host said, at the moment it said (late commands catch up by seeking). */
+    private fun applyLanCommand(cmd: JSONObject, inMs: Long) {
+        val p = player ?: return
+        val pos = cmd.optDouble("position", 0.0).toFloat()
+        val late = (-inMs).coerceAtLeast(0) / 1000f
+        val run: () -> Unit = when (cmd.optString("type")) {
+            "custom" -> {
+                runCatching { JSONObject(cmd.optString("data")) }.getOrNull()?.let { m -> lanTrack = Track(lanTrack?.id ?: "", m.optString("title"), m.optString("artist")) }
+                return
+            }
+            "load" -> {
+                val id = cmd.optString("id")
+                lanTrack = (lanTrack ?: Track(id, "Linked", "")).copy(id = id)
+                p.load(id, pos, autoplay = false)
+                return
+            }
+            "play" -> ({ p.seek(pos + late); p.play() })
+            "pause" -> ({ p.pause(); p.seek(pos) })
+            "seek" -> ({ p.seek(pos + if (p.playing) late else 0f) })
+            "stop" -> ({ p.pause() })
+            else -> return
+        }
+        if (inMs > 0) lanMain.postDelayed(run, inMs) else run()
+    }
+
+    /** Host: a member asked for play/pause/seek (the room isn't locked, or the core would refuse). */
+    private fun hostApplyRequest(cmd: JSONObject) {
+        val p = player ?: return
+        when (cmd.optString("type")) {
+            "play" -> if (!p.playing) togglePlay()
+            "pause" -> if (p.playing) togglePlay()
+            "seek" -> seek(cmd.optDouble("position", 0.0).toFloat())
+        }
     }
 
     fun playTracks(tracks: List<Track>, start: Int, shuffle: Boolean = false) {
@@ -886,6 +1036,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     fun togglePlay() {
         val p = player ?: return
+        if (lanMember) {
+            lanRequest(lanCommand(if (p.playing) "pause" else "play", p.position))
+            return
+        }
+        if (lanHost && p.currentId != null) {
+            val play = !p.playing
+            lanBroadcast(lanCommand(if (play) "play" else "pause", p.position)) { if (play) p.play() else p.pause() }
+            return
+        }
         if (room != null) {
             roomSend(if (roomState?.playing == true) "pause" else "play", "position" to p.position)
             return
@@ -1047,6 +1206,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun seek(seconds: Float) {
+        if (lanMember) {
+            lanRequest(lanCommand("seek", seconds))
+            return
+        }
+        if (lanHost) lanBroadcast(lanCommand("seek", seconds), leadMs = 60) {}
         if (room != null) {
             roomSend("seek", "position" to seconds)
         } else {
@@ -1338,6 +1502,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun setTheme(id: String) {
+        if (Brand.look.useCustom) {
+            Brand.look = Brand.look.copy(useCustom = false)
+            Brand.look.save(look)
+        }
         Brand.palette = withLook(Palettes.byId(id)) // instant; saved below
         io { settings = Core.setTheme(id) }
     }
@@ -1408,6 +1576,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     // ---- Personalize: accent colour, colours from the album art, start tab, autoplay ----
 
+    // ---- Customize: style, layout, Home sections, tabs, song menu, custom theme ----
+
+    init {
+        Brand.look = dev.foulfoxhacks.betteryts.music.ui.theme.Look.load(look)
+    }
+
+    /** Changes the Look, saves it and re-applies the palette. */
+    fun updateLook(change: (dev.foulfoxhacks.betteryts.music.ui.theme.Look) -> dev.foulfoxhacks.betteryts.music.ui.theme.Look) {
+        val next = change(Brand.look)
+        Brand.look = next
+        next.save(look)
+        Brand.palette = withLook(Palettes.byId(settings.theme))
+    }
+
+    /** Saves a custom theme from the editor and switches to it (refused if it's hard to read). */
+    fun saveCustomTheme(theme: dev.foulfoxhacks.betteryts.music.ui.theme.CustomTheme): Boolean {
+        dev.foulfoxhacks.betteryts.music.ui.theme.contrastProblem(theme.palette())?.let {
+            message = it
+            return false
+        }
+        updateLook { it.copy(custom = theme, useCustom = true) }
+        message = "Theme “${theme.name}” applied"
+        return true
+    }
+
+    fun importTheme(text: String) {
+        dev.foulfoxhacks.betteryts.music.ui.theme.CustomTheme.parse(text)
+            .onSuccess { saveCustomTheme(it) }
+            .onFailure { message = it.message ?: "That theme couldn't be read" }
+    }
+
     /** A chosen accent (ARGB), or null for the theme's own. */
     var accent by mutableStateOf<Long?>(look.getLong("accent", 0L).takeIf { it != 0L })
         private set
@@ -1463,7 +1662,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     /** Active Look plugins' colours over a theme; later plugins win. Colours were checked by the core. */
     private fun withLook(theme: dev.foulfoxhacks.betteryts.music.ui.theme.Palette): dev.foulfoxhacks.betteryts.music.ui.theme.Palette {
         fun color(hex: String?) = hex?.let { runCatching { androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
-        val base = Palettes.withAccent(theme, (if (albumColors) albumAccent else null) ?: accent)
+        val chosen = Brand.look.custom?.takeIf { Brand.look.useCustom }?.palette() ?: theme
+        val tinted = Palettes.withAccent(chosen, (if (albumColors) albumAccent else null) ?: accent.takeIf { !Brand.look.useCustom })
+        // Glass: cards and bars let the ambient backdrop show through.
+        val base = if (Brand.look.style == "glass") tinted.copy(surface = tinted.surface.copy(alpha = 0.62f), raised = tinted.raised.copy(alpha = 0.92f)) else tinted
         var p = base
         for (plugin in settings.activeCommunity.filter { "palette" in it.permissions }) {
             color(plugin.palette["accent"])?.let { p = p.copy(accent = it, lineAccent = it.copy(alpha = 0.26f)) }
@@ -1852,6 +2054,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         }
     }
 
+    /** "Analyse tempo & key" for songs on the phone: progress text, or null when idle. */
+    var analyzing by mutableStateOf<String?>(null)
+        private set
+
+    /** Decodes each device song (in the core) to find its tempo and key, for Smart stations and mixes. */
+    fun analyzeDeviceSongs() {
+        val songs = (deviceSongs as? Load.Ready)?.value.orEmpty()
+        if (songs.isEmpty() || analyzing != null) return
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            ready.join()
+            var done = 0
+            var failed = 0
+            for (t in songs) {
+                analyzing = "Analysing ${done + 1} of ${songs.size}…"
+                val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        ctx.contentResolver.openFileDescriptor(DeviceMusic.uri(t.id), "r")?.use { pfd ->
+                            Core.analyzeFile(t.id, "/proc/self/fd/${pfd.fd}")
+                        }
+                    }.isSuccess
+                }
+                if (ok) done++ else failed++
+            }
+            analyzing = null
+            message = "Analysed $done songs${if (failed > 0) " ($failed couldn't be read)" else ""}. Smart stations now use their tempo and key."
+        }
+    }
+
     /** Library chip: all, songs, playlists, artists, device or history. */
     var libraryTab by mutableStateOf("all")
 
@@ -2083,7 +2314,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     /** What's playing: the room's video while in a room, otherwise the local queue's. */
     val nowPlaying: Track?
-        get() = if (room != null) roomState?.video?.let { Track(it.id, it.title, "Listening together") } else queue.current
+        get() = when {
+            room != null -> roomState?.video?.let { Track(it.id, it.title, "Listening together") }
+            lan?.role == "member" -> lanTrack
+            else -> queue.current
+        }
 
     val canSkip: Boolean get() = if (room != null) roomState?.queue?.isNotEmpty() == true else queue.hasNext
 

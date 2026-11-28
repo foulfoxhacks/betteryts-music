@@ -54,6 +54,14 @@
                 <data android:scheme="betterytsmusic" android:host="oauth" />
             </intent-filter>
 
+            <!-- BTLink invites (local-network sync) shared from another BetterYTS device. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="betterytsmusic" android:host="link" />
+            </intent-filter>
+
             <!-- Offer to open YouTube Music and BetterYTS links. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

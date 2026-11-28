@@ -50,7 +50,7 @@ fun LogoSplash(onDone: () -> Unit) {
     val exit = remember { Animatable(1f) }
 
     LaunchedEffect(Unit) {
-        if (animationsOff) return@LaunchedEffect onDone()
+        if (animationsOff || dev.foulfoxhacks.betteryts.music.ui.theme.Brand.look.reducedMotion) return@LaunchedEffect onDone()
         launch { appear.animateTo(1f, tween(650, easing = LinearOutSlowInEasing)) }
         delay(1150)
         exit.animateTo(0f, tween(380, easing = FastOutSlowInEasing))
