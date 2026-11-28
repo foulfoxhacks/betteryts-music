@@ -17,6 +17,11 @@ serde_json = "1"
 ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
 jni = "0.21"
 snow = "0.9"
+# BetterYTS Sync (sync.rs): the same AES-256-GCM + SHA-256 scheme as the website's web/sync.js.
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "aac", "isomp4", "ogg", "vorbis", "wav", "pcm"] }
 
 [profile.release]

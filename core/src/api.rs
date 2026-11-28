@@ -192,6 +192,11 @@ impl Api {
 		&self.base
 	}
 
+	/// The shared agent, for calls that need their own headers and methods (BetterYTS Sync).
+	pub fn http(&self) -> &ureq::Agent {
+		&self.agent
+	}
+
 	pub fn url(&self, path: &str, query: &[(&str, &str)]) -> String {
 		let mut url = format!("{}{}", self.base, path);
 		let mut first = true;

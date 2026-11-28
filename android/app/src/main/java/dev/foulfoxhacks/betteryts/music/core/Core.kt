@@ -366,6 +366,40 @@ object Core {
         return (o.optJSONObject("summary") ?: JSONObject()) to settingsFrom(o.optJSONObject("settings") ?: JSONObject())
     }
 
+    // ---- BetterYTS Sync: end-to-end encrypted library sync (core/src/sync.rs) ----
+
+    /** This device's sync state. [code] is the only key, kept in the app's private storage. */
+    data class SyncInfo(val enabled: Boolean, val code: String?, val lastSync: Long?, val items: Int, val version: Long)
+
+    private fun syncInfo(o: JSONObject) = SyncInfo(
+        enabled = o.optBoolean("enabled"),
+        code = o.str("code"),
+        lastSync = if (o.has("lastSync") && !o.isNull("lastSync")) o.optLong("lastSync") else null,
+        items = o.optInt("items"),
+        version = o.optLong("version"),
+    )
+
+    suspend fun syncGet() = syncInfo(obj("sync.get"))
+
+    /** Starts a brand-new vault: this library is uploaded on the next sync. */
+    suspend fun syncNewCode() = syncInfo(obj("sync.newCode"))
+
+    /** Joins an existing vault with the code another device shows. */
+    suspend fun syncSetCode(code: String) = syncInfo(obj("sync.setCode", args("code" to code.trim())))
+
+    /** One sync round: merges both sides and applies what changed here. */
+    suspend fun syncNow(): Triple<Boolean, Library?, SyncInfo> {
+        val o = obj("sync.now")
+        return Triple(o.optBoolean("changed"), o.optJSONObject("library")?.let(Library::from), syncInfo(o.optJSONObject("sync") ?: JSONObject()))
+    }
+
+    suspend fun syncOff() {
+        request("sync.off")
+    }
+
+    /** Deletes the encrypted copy on BetterYTS; every device keeps its own library. */
+    suspend fun syncErase() = syncInfo(obj("sync.erase"))
+
     data class WorldCode(val code: String, val service: String, val capabilities: List<String>, val expiresIn: Long?)
 
     /** Checks an activation code shown in a VRChat world. */
@@ -405,6 +439,9 @@ object Core {
     }
 
     suspend fun setSponsorCategories(ids: List<String>) = settingsFrom(obj("settings.sponsorCategories", args("categories" to org.json.JSONArray(ids))))
+
+    /** DeArrow's best community title for a song, or null when nobody has submitted one. */
+    suspend fun dearrow(id: String): String? = (request("plugin.dearrow", args("id" to id)) as? JSONObject)?.str("title")
 
     // ---- dislikes, album actions, sharing, scrobbling ----
 

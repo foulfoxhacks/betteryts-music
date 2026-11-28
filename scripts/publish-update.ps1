@@ -23,7 +23,11 @@ try {
 } finally { Pop-Location }
 
 $gradle = Get-Content (Join-Path $android "app\build.gradle.kts") -Raw
-$code = [int]([regex]::Match($gradle, 'versionCode\s*=\s*(\d+)').Groups[1].Value)
+# Same rule as build.gradle.kts: base versionCode plus the build number CI passes in.
+$base = [int]([regex]::Match($gradle, 'versionCode\s*=\s*(\d+)\s*\+').Groups[1].Value)
+$bump = 0
+if ($env:BTM_VERSION_CODE) { $bump = [int]$env:BTM_VERSION_CODE }
+$code = $base + $bump
 $name = [regex]::Match($gradle, 'versionName\s*=\s*"([^"]+)"').Groups[1].Value
 $apk = Join-Path $android "app\build\outputs\apk\sideload\release\app-sideload-release.apk"
 $aab = Join-Path $android "app\build\outputs\bundle\playRelease\app-play-release.aab"

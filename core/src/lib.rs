@@ -30,6 +30,7 @@ pub mod spotify;
 pub mod stations;
 pub mod qr;
 pub mod backup;
+pub mod sync;
 pub mod inworld;
 pub mod spotify_account;
 #[cfg(test)]

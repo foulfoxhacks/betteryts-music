@@ -98,6 +98,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         message = text
     }
 
+    /** BetterYTS Sync: this device's code and when it last synced (Settings › Sync). */
+    var sync by mutableStateOf<Core.SyncInfo?>(null)
+        private set
+    var syncBusy by mutableStateOf(false)
+        private set
+
     /** Dialogs: "Add to playlist" for a track, and "New playlist" (optionally pre-filled). */
     var playlistPickerFor by mutableStateOf<Track?>(null)
     var newPlaylistWith by mutableStateOf<List<Track>?>(null)
@@ -133,6 +139,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     var resumeEnabled by mutableStateOf(playPrefs.getBoolean("resume", true))
         private set
 
+    /** Captions turn on for songs that have them (the player's Sound panel picks the language). */
+    var captionsOn by mutableStateOf(playPrefs.getBoolean("captions", true))
+        private set
+
     /** Resume positions are saved twice a second by the player; only write every few seconds. */
     private var lastProgressAt = 0L
     private var endedId: String? = null
@@ -147,6 +157,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
             applyPlugins()
             library = Core.library()
             queue = Core.queueGet()
+            sync = Core.syncGet()
             restoreQueue()
         } catch (e: CoreException) {
             message = e.message
@@ -155,6 +166,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     init {
         refreshFeed()
+        autoSync()
+    }
+
+    /** Syncs quietly on launch when the last sync is a few hours old (the button is in Settings). */
+    private fun autoSync() = viewModelScope.launch {
+        ready.join()
+        val s = sync ?: return@launch
+        if (!s.enabled || System.currentTimeMillis() - (s.lastSync ?: 0) < 3 * 60 * 60 * 1000) return@launch
+        try {
+            val (changed, lib, info) = Core.syncNow()
+            sync = info
+            if (changed && lib != null) {
+                library = lib
+                refreshFeed()
+            }
+        } catch (_: CoreException) {
+            // Offline or a busy vault: the user can sync from Settings.
+        }
     }
 
     /** Runs after the core is initialised; core errors become a snackbar message. */
@@ -385,6 +414,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     fun attach(p: PlayerController) {
         player = p
         p.listener = this
+        p.captionsAuto = captionsOn
         speed = playPrefs.getFloat("speed", 1f).takeIf { it in 0.5f..2f } ?: 1f
         p.applySpeed(speed)
         p.setVolumePercent(curve(volumeSlider))
@@ -630,6 +660,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         resumeEnabled = on
         playPrefs.edit().putBoolean("resume", on).apply()
         message = if (on) "Songs will resume where you left off" else "Songs always start from the beginning"
+    }
+
+    fun setCaptions(on: Boolean) {
+        captionsOn = on
+        player?.captionsAuto = on
+        playPrefs.edit().putBoolean("captions", on).apply()
+        message = if (on) "Captions turn on when a song has them" else "Captions stay off unless you pick one"
     }
 
     // ---- Sound: precise and exponential volume, skip silence, equalizer, compressor ----
@@ -1820,6 +1857,47 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         message = if (parts.isEmpty()) "Backup checked: nothing new to add" else "Imported " + parts.joinToString(", ")
     }
 
+    // ---- BetterYTS Sync: end-to-end encrypted library sync (core/src/sync.rs) ----
+
+    fun newSyncCode() = io {
+        sync = Core.syncNewCode()
+        say("New sync code ready. Sync now to upload this library, then enter the same code on your other devices.")
+    }
+
+    fun setSyncCode(code: String) = io {
+        sync = Core.syncSetCode(code)
+        runSync()
+    }
+
+    fun syncNow() = io { runSync() }
+
+    private suspend fun runSync() {
+        syncBusy = true
+        try {
+            val (changed, lib, info) = Core.syncNow()
+            sync = info
+            if (changed && lib != null) {
+                library = lib
+                smartPlaylists = Core.smartList()
+                refreshFeed()
+            }
+            say(if (changed) "Synced: this library took on what the other devices changed" else "Synced: everything was already up to date")
+        } finally {
+            syncBusy = false
+        }
+    }
+
+    fun turnOffSync() = io {
+        Core.syncOff()
+        sync = Core.syncGet()
+        say("Sync is off on this phone. The library stays here.")
+    }
+
+    fun eraseSyncVault() = io {
+        sync = Core.syncErase()
+        say("The encrypted copy on BetterYTS was deleted. Every device keeps its own library.")
+    }
+
     /** Settings › Hidden: comma- or line-separated lists, cleaned by the core. */
     fun setHidden(channels: String, words: String) = io {
         fun split(s: String) = s.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
@@ -1841,13 +1919,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
         private set
     val lyrics = mutableStateMapOf<String, Load<Core.Lyrics?>>()
 
+    /** Community titles from DeArrow (the plugin is off by default), keyed by video ID. */
+    var betterTitles by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+
+    /** The title to show for a song: DeArrow's when it has one, YouTube's otherwise. */
+    fun titleOf(t: Track): String = betterTitles[t.id] ?: t.title
+
     private fun onTrackChanged(t: Track) {
         skippedUntil = 0f
         updateAlbumColor(t)
         if (settings.activeCommunity.isNotEmpty()) roomMain.post { sendNowPlaying(force = true) }
         dislikes = null
-        // SponsorBlock and dislike counts are YouTube data; device files have neither.
+        // SponsorBlock, DeArrow and dislike counts are YouTube data; device files have none.
         if (t.isLocal) return
+        if (pluginOn("dearrow") && t.id !in betterTitles) {
+            viewModelScope.launch {
+                val better = try { Core.dearrow(t.id) } catch (_: CoreException) { null }
+                if (better != null && better != t.title) {
+                    if (betterTitles.size >= 200) betterTitles = emptyMap()
+                    betterTitles = betterTitles + (t.id to better)
+                }
+            }
+        }
         if (pluginOn("sponsorblock") && t.id !in segmentsFor) {
             viewModelScope.launch {
                 segmentsFor[t.id] = try { Core.segments(t.id) } catch (_: CoreException) { emptyList() }

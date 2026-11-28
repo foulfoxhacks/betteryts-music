@@ -56,6 +56,13 @@ pub const CATALOG: &[PluginInfo] = &[
 		default_enabled: true,
 	},
 	PluginInfo {
+		id: "dearrow",
+		name: "DeArrow titles",
+		description: "Community titles instead of clickbait: \"M83 – Midnight City\" rather than \"M83 - Midnight City (OFFICIAL VIDEO)!!!\". Off by default; votes come from DeArrow.",
+		category: "Player",
+		default_enabled: false,
+	},
+	PluginInfo {
 		id: "dislikes",
 		name: "Return YouTube Dislike",
 		description: "Shows like and dislike counts in the player.",
@@ -484,6 +491,8 @@ pub const SPONSOR_CATEGORIES: &[(&str, &str)] = &[
 	("interaction", "Like/subscribe reminders"),
 	("preview", "Previews and recaps"),
 	("filler", "Filler and tangents"),
+	("hook", "Hooks and greetings"),
+	("exclusive_access", "Exclusive access"),
 ];
 
 /// Only known categories, de-duplicated; empty means the default.
@@ -537,6 +546,80 @@ pub fn dislikes(api: &Api, id: &str) -> Result<Value, String> {
 		Ok(v) => Ok(json!({ "likes": v.get("likes"), "dislikes": v.get("dislikes") })),
 		// No vote data for this video: not an error worth showing.
 		Err(_) => Ok(Value::Null),
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// DeArrow (https://dearrow.ajay.app — community titles and thumbnails, no key)
+// ---------------------------------------------------------------------------------------------
+
+/// DeArrow's branding endpoint. Off by default: these titles are volunteers' work, not the
+/// uploader's, so nobody sees them until they switch the plugin on.
+pub const DEARROW_API: &str = "https://sponsor.ajay.app/api/branding";
+
+/// The best-voted community title and one thumbnail frame for a video.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Branding {
+	pub title: Option<String>,
+	pub thumbnail: Option<String>,
+	/// Votes behind the chosen title (0 when there is none).
+	pub votes: i64,
+}
+
+/// The winning entry: locked beats unlocked, then the most votes. Removed entries and the
+/// uploader's original title are never chosen, so a video with no useful submissions keeps its
+/// own title.
+fn best_vote<'a>(items: &[&'a Value]) -> Option<(bool, i64, &'a Value)> {
+	let mut best: Option<(bool, i64, &'a Value)> = None;
+	for &it in items {
+		let flag = |k: &str| it.get(k).and_then(Value::as_bool) == Some(true);
+		if flag("removed") || flag("original") {
+			continue;
+		}
+		let candidate = (flag("locked"), it.get("votes").and_then(Value::as_i64).unwrap_or(0), it);
+		if best.as_ref().map_or(true, |b| (candidate.0, candidate.1) > (b.0, b.1)) {
+			best = Some(candidate);
+		}
+	}
+	best
+}
+
+pub fn parse_branding(v: &Value, video_id: &str) -> Branding {
+	let list = |key: &str| -> Vec<&Value> { v.get(key).and_then(Value::as_array).map(|a| a.iter().collect()).unwrap_or_default() };
+	// A thumbnail needs a usable frame time; a broken one mustn't hide the next-best submission.
+	let thumbs: Vec<&Value> = list("thumbnails").into_iter().filter(|t| t.get("timestamp").and_then(Value::as_f64).is_some_and(|x| x.is_finite() && x >= 0.0)).collect();
+	let title = best_vote(&list("titles")).and_then(|(_, votes, it)| {
+		let t: String = it.get("title").and_then(Value::as_str)?.chars().filter(|c| !c.is_control()).take(200).collect::<String>().trim().to_string();
+		(!t.is_empty()).then_some((t, votes))
+	});
+	let thumbnail = best_vote(&thumbs).map(|(_, _, it)| {
+		let at = it.get("timestamp").and_then(Value::as_f64).unwrap_or(0.0);
+		format!("https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID={}&time={at}", enc(video_id))
+	});
+	Branding { votes: title.as_ref().map(|(_, v)| *v).unwrap_or(0), title: title.map(|(t, _)| t), thumbnail }
+}
+
+/// The best DeArrow title and thumbnail for a video, or None when nobody has submitted one.
+pub fn dearrow(video_id: &str) -> Result<Option<Branding>, String> {
+	if !(video_id.len() == 11 && video_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+		return Ok(None);
+	}
+	let agent = ureq::AgentBuilder::new()
+		.timeout_connect(Duration::from_secs(8))
+		.timeout(Duration::from_secs(15))
+		// DeArrow asks clients to identify themselves, like LRCLIB does.
+		.user_agent(concat!("BetterYTSMusic/", env!("CARGO_PKG_VERSION"), " (https://yts.foulfoxhacks.dev)"))
+		.build();
+	match agent.get(&format!("{DEARROW_API}?videoID={}", enc(video_id))).call() {
+		Ok(r) => {
+			let text = r.into_string().map_err(|e| format!("DeArrow sent something unreadable ({e})"))?;
+			let v: Value = serde_json::from_str(&text).map_err(|_| "DeArrow sent something that isn't JSON".to_string())?;
+			Ok(Some(parse_branding(&v, video_id)))
+		}
+		Err(ureq::Error::Status(404, _)) => Ok(None),
+		Err(ureq::Error::Status(code, _)) => Err(format!("DeArrow returned HTTP {code}")),
+		Err(ureq::Error::Transport(t)) => Err(format!("Can't reach DeArrow ({})", t.kind())),
 	}
 }
 
@@ -798,6 +881,47 @@ mod tests {
 		let both = parse_segments_for(&v, &clean_categories(&["sponsor".into(), "bogus".into(), "sponsor".into()]));
 		assert_eq!(both, vec![Segment { start: 10.0, end: 20.0, category: "sponsor".into() }], "only chosen, known categories");
 		assert_eq!(clean_categories(&[]), ["music_offtopic"]);
+	}
+
+	#[test]
+	fn dearrow_picks_the_best_vote() {
+		let v = json!({
+			"titles": [
+				{ "title": "Original clickbait", "votes": 99, "original": true },
+				{ "title": "Removed joke", "votes": 50, "removed": true },
+				{ "title": "M83 – Midnight City", "votes": 3 },
+				{ "title": "M83 - Midnight City", "votes": 5 },
+			],
+			"thumbnails": [
+				{ "timestamp": 40.0, "votes": 1 },
+				{ "timestamp": 12.5, "votes": 2 },
+				{ "timestamp": -1.0, "votes": 9 },
+			],
+		});
+		let b = parse_branding(&v, "dX3k_U8b9Rc");
+		assert_eq!(b.title.as_deref(), Some("M83 - Midnight City"), "the uploader's own title is never shown");
+		assert_eq!(b.votes, 5);
+		assert_eq!(b.thumbnail.as_deref(), Some("https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=dX3k_U8b9Rc&time=12.5"));
+		// A locked title from a moderator wins even with fewer votes.
+		let locked = json!({ "titles": [{ "title": "Locked", "votes": 0, "locked": true }, { "title": "Popular", "votes": 20 }] });
+		assert_eq!(parse_branding(&locked, "dX3k_U8b9Rc").title.as_deref(), Some("Locked"));
+		// Nothing worth showing leaves the song as it is.
+		let none = parse_branding(&json!({ "titles": [{ "title": "x", "votes": 1, "removed": true }] }), "dX3k_U8b9Rc");
+		assert_eq!(none, Branding { title: None, thumbnail: None, votes: 0 });
+		assert_eq!(parse_branding(&json!({}), "dX3k_U8b9Rc"), Branding { title: None, thumbnail: None, votes: 0 });
+		assert!(dearrow("short").unwrap().is_none(), "not a video ID, so there's nothing to ask about");
+	}
+
+	#[test]
+	fn dearrow_is_off_until_switched_on() {
+		let info = CATALOG.iter().find(|p| p.id == "dearrow").expect("the plugin exists");
+		assert!(!info.default_enabled, "community titles are opt-in");
+		let mut s = Settings::default();
+		assert!(!s.enabled("dearrow"));
+		assert!(s.set_plugin("dearrow", true));
+		assert!(s.enabled("dearrow"));
+		assert!(s.set_plugin("dearrow", false));
+		assert!(!s.enabled("dearrow"));
 	}
 
 	#[test]

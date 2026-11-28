@@ -15,7 +15,9 @@ android {
         applicationId = "dev.foulfoxhacks.betteryts.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
+        // Every published build gets a higher versionCode: CI passes the workflow run number, so
+        // the in-app updater sees each new main build as an update. Local builds keep 14.
+        versionCode = 14 + (System.getenv("BTM_VERSION_CODE")?.toIntOrNull() ?: 0)
         versionName = "0.10.0"
         // Built by ../scripts/build-core.ps1 into src/main/jniLibs.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
