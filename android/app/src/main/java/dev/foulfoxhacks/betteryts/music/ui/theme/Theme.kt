@@ -50,6 +50,8 @@ data class Palette(
     /** Filled container for the selected tab pill and other emphasised surfaces. */
     val container: Color,
     val onContainer: Color,
+    /** A light theme: dark text, dark system-bar icons. */
+    val light: Boolean = false,
 )
 
 object Palettes {
@@ -117,7 +119,24 @@ object Palettes {
         container = Color(0xFF135CFF), onContainer = Color.White,
     )
 
-    val all = listOf(BetterYTS, Amoled, Ember, Mello)
+    /** Light: navy text on near-white, with the logo's orange and blue. */
+    val Daylight = Palette(
+        id = "daylight",
+        ink = Color(0xFFF6F7FB), surface = Color(0xFFFFFFFF), raised = Color(0xFFEDEFF6), selected = Color(0xFFDDE5FF),
+        paper = Color(0xFF0B1020), muted = Color(0xFF4A5372),
+        accent = Color(0xFFC2410C), onAccent = Color.White, eyebrow = Color(0xFF0A5FBF),
+        warm = Color(0xFF0A84FF), hot = Color(0xFFB91C1C), violet = Color(0xFF6D28D9), love = Color(0xFFDB2777),
+        line = Color(0x1F0B1020), lineAccent = Color(0x94C2410C),
+        title = listOf(Color(0xFF0B1020), Color(0xFF0A5FBF), Color(0xFF6D28D9), Color(0xFFC2410C)),
+        heading = listOf(Color(0xFF0B1020), Color(0xFF0A5FBF), Color(0xFF6D28D9), Color(0xFFC2410C)),
+        button = listOf(Color(0x1A0A84FF), Color(0x146D28D9), Color(0x10C2410C)),
+        card = listOf(Color(0xFFFFFFFF), Color(0xFFF6F7FB)),
+        glow = Color(0x330A84FF),
+        container = Color(0xFFDDE5FF), onContainer = Color(0xFF0B1020),
+        light = true,
+    )
+
+    val all = listOf(BetterYTS, Amoled, Daylight, Ember, Mello)
     fun byId(id: String?) = all.firstOrNull { it.id == id } ?: BetterYTS
 
     /** Swatches for Settings › Personalize › Accent. */
@@ -138,6 +157,9 @@ object Palettes {
  */
 object Brand {
     var palette by mutableStateOf(Palettes.BetterYTS)
+
+    /** Layout and style choices (Settings › Customize). */
+    var look by mutableStateOf(Look())
 
     val Ink get() = palette.ink
     val Surface get() = palette.surface
@@ -195,8 +217,13 @@ val AppShapes = Shapes(
 @Composable
 fun BetterYTSTheme(content: @Composable () -> Unit) {
     val p = Brand.palette
-    MaterialTheme(
-        colorScheme = darkColorScheme(
+    val scheme = if (p.light) androidx.compose.material3.lightColorScheme(
+        primary = p.accent, onPrimary = p.onAccent, primaryContainer = p.container, onPrimaryContainer = p.onContainer,
+        secondaryContainer = p.raised, onSecondaryContainer = p.eyebrow, secondary = p.violet, onSecondary = Color.White, tertiary = p.hot,
+        background = p.ink, onBackground = p.paper, surface = p.surface, onSurface = p.paper, surfaceVariant = p.raised, onSurfaceVariant = p.muted,
+        surfaceContainerLowest = p.ink, surfaceContainerLow = p.surface, surfaceContainer = p.surface, surfaceContainerHigh = p.raised, surfaceContainerHighest = p.selected,
+        outline = p.muted.copy(alpha = 0.45f), outlineVariant = p.line, error = Color(0xFFB91C1C),
+    ) else darkColorScheme(
             primary = p.accent,
             onPrimary = p.onAccent,
             primaryContainer = p.container,
@@ -220,7 +247,9 @@ fun BetterYTSTheme(content: @Composable () -> Unit) {
             outline = p.muted.copy(alpha = 0.45f),
             outlineVariant = p.line,
             error = Color(0xFFFF6B6B),
-        ),
+        )
+    MaterialTheme(
+        colorScheme = scheme,
         typography = Typography().run {
             copy(
                 displaySmall = displaySmall.copy(fontWeight = FontWeight.Black, fontSize = 34.sp, lineHeight = 38.sp, letterSpacing = (-0.5).sp),
@@ -236,6 +265,12 @@ fun BetterYTSTheme(content: @Composable () -> Unit) {
             )
         },
         shapes = AppShapes,
-        content = content,
-    )
+    ) {
+        // Settings › Customize › Text size scales every sp on top of the system's own setting.
+        val d = androidx.compose.ui.platform.LocalDensity.current
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(d.density, d.fontScale * Brand.look.fontScale),
+            content = content,
+        )
+    }
 }

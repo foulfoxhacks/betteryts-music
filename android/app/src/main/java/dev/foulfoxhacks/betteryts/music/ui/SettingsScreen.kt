@@ -73,6 +73,19 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
             }
 
             item { SectionHeader("Personalize") }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().clickable { vm.stack.add(Route.CustomizeRoute) }.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(AppIcons.Edit, null, tint = Brand.Gold)
+                    Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                        Text("Customize", color = Brand.Paper, fontWeight = FontWeight.Bold)
+                        Text("Style (Flat, Ambient, Glass), theme editor, text size, tabs, Home sections, song menu.", color = Brand.Muted, fontSize = 13.sp)
+                    }
+                    Icon(AppIcons.Chevron, null, tint = Brand.Muted)
+                }
+            }
             item { PersonalizeSection(vm) }
 
             item { SectionHeader("Playback") }

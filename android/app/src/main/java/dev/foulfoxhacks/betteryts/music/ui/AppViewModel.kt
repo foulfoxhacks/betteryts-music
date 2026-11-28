@@ -57,6 +57,7 @@ sealed interface Route {
     data class SmartRoute(val id: String, val name: String) : Route
     data object SettingsRoute : Route
     data object DiagnosticsRoute : Route
+    data object CustomizeRoute : Route
 }
 
 /** A home shelf filled from a search, so Home has music on day one. */
@@ -1501,6 +1502,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     }
 
     fun setTheme(id: String) {
+        if (Brand.look.useCustom) {
+            Brand.look = Brand.look.copy(useCustom = false)
+            Brand.look.save(look)
+        }
         Brand.palette = withLook(Palettes.byId(id)) // instant; saved below
         io { settings = Core.setTheme(id) }
     }
@@ -1571,6 +1576,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
 
     // ---- Personalize: accent colour, colours from the album art, start tab, autoplay ----
 
+    // ---- Customize: style, layout, Home sections, tabs, song menu, custom theme ----
+
+    init {
+        Brand.look = dev.foulfoxhacks.betteryts.music.ui.theme.Look.load(look)
+    }
+
+    /** Changes the Look, saves it and re-applies the palette. */
+    fun updateLook(change: (dev.foulfoxhacks.betteryts.music.ui.theme.Look) -> dev.foulfoxhacks.betteryts.music.ui.theme.Look) {
+        val next = change(Brand.look)
+        Brand.look = next
+        next.save(look)
+        Brand.palette = withLook(Palettes.byId(settings.theme))
+    }
+
+    /** Saves a custom theme from the editor and switches to it (refused if it's hard to read). */
+    fun saveCustomTheme(theme: dev.foulfoxhacks.betteryts.music.ui.theme.CustomTheme): Boolean {
+        dev.foulfoxhacks.betteryts.music.ui.theme.contrastProblem(theme.palette())?.let {
+            message = it
+            return false
+        }
+        updateLook { it.copy(custom = theme, useCustom = true) }
+        message = "Theme “${theme.name}” applied"
+        return true
+    }
+
+    fun importTheme(text: String) {
+        dev.foulfoxhacks.betteryts.music.ui.theme.CustomTheme.parse(text)
+            .onSuccess { saveCustomTheme(it) }
+            .onFailure { message = it.message ?: "That theme couldn't be read" }
+    }
+
     /** A chosen accent (ARGB), or null for the theme's own. */
     var accent by mutableStateOf<Long?>(look.getLong("accent", 0L).takeIf { it != 0L })
         private set
@@ -1626,7 +1662,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PlayerController.L
     /** Active Look plugins' colours over a theme; later plugins win. Colours were checked by the core. */
     private fun withLook(theme: dev.foulfoxhacks.betteryts.music.ui.theme.Palette): dev.foulfoxhacks.betteryts.music.ui.theme.Palette {
         fun color(hex: String?) = hex?.let { runCatching { androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
-        val base = Palettes.withAccent(theme, (if (albumColors) albumAccent else null) ?: accent)
+        val chosen = Brand.look.custom?.takeIf { Brand.look.useCustom }?.palette() ?: theme
+        val tinted = Palettes.withAccent(chosen, (if (albumColors) albumAccent else null) ?: accent.takeIf { !Brand.look.useCustom })
+        // Glass: cards and bars let the ambient backdrop show through.
+        val base = if (Brand.look.style == "glass") tinted.copy(surface = tinted.surface.copy(alpha = 0.62f), raised = tinted.raised.copy(alpha = 0.92f)) else tinted
         var p = base
         for (plugin in settings.activeCommunity.filter { "palette" in it.permissions }) {
             color(plugin.palette["accent"])?.let { p = p.copy(accent = it, lineAccent = it.copy(alpha = 0.26f)) }

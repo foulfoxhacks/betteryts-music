@@ -161,15 +161,15 @@ fun TrackRow(
     Row(
         modifier
             .fillMaxWidth()
-            .background(if (current) Brand.Selected else Brand.Ink)
+            .background(if (current) Brand.Selected else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            .padding(start = 16.dp, top = if (Brand.look.compact) 3.dp else 8.dp, bottom = if (Brand.look.compact) 3.dp else 8.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (leading != null) {
             Text(leading, Modifier.width(28.dp), color = if (current) Brand.Gold else Brand.Muted, fontSize = 13.sp)
         }
-        RemoteImage(track.art, Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
+        RemoteImage(track.art, Modifier.size(if (Brand.look.compact) 42.dp else 52.dp).clip(RoundedCornerShape(10.dp)))
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(track.title, color = if (current) Brand.Gold else Brand.Paper, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(track.subtitle, color = Brand.Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -188,14 +188,16 @@ fun TrackMenuButton(vm: AppViewModel, track: Track, extraActions: List<Pair<Stri
         IconButton(onClick = { open = true }) { Icon(AppIcons.More, "More options for ${track.title}", tint = Brand.Muted) }
         DropdownMenu(open, onDismissRequest = { open = false }, containerColor = Brand.Raised) {
             val close = { open = false }
-            if (vm.pluginOn("radio") && !track.isLocal) MenuItem("Start radio", close) { vm.startRadio(track) }
-            MenuItem("Play next", close) { vm.playNext(track) }
-            MenuItem("Add to queue", close) { vm.addToQueue(track) }
-            MenuItem(if (vm.library.isFavorite(track.id)) "Remove from favorites" else "Add to favorites", close) { vm.toggleFavorite(track) }
-            MenuItem("Add to playlist…", close) { vm.playlistPickerFor = track }
-            MenuItem(if (vm.library.isDisliked(track.id)) "Remove dislike" else "Dislike", close) { vm.toggleDislike(track) }
-            if (!track.isLocal) MenuItem("Share", close) { vm.share(track) }
-            if (track.artistId != null) MenuItem("Go to artist", close) { vm.openArtist(track.artistId, track.artist) }
+            // Items can be hidden in Settings › Customize › Song menu.
+            val shown = { key: String -> key !in Brand.look.menuHidden }
+            if (shown("radio") && vm.pluginOn("radio") && !track.isLocal) MenuItem("Start radio", close) { vm.startRadio(track) }
+            if (shown("playNext")) MenuItem("Play next", close) { vm.playNext(track) }
+            if (shown("addQueue")) MenuItem("Add to queue", close) { vm.addToQueue(track) }
+            if (shown("favorite")) MenuItem(if (vm.library.isFavorite(track.id)) "Remove from favorites" else "Add to favorites", close) { vm.toggleFavorite(track) }
+            if (shown("playlist")) MenuItem("Add to playlist…", close) { vm.playlistPickerFor = track }
+            if (shown("dislike")) MenuItem(if (vm.library.isDisliked(track.id)) "Remove dislike" else "Dislike", close) { vm.toggleDislike(track) }
+            if (shown("share") && !track.isLocal) MenuItem("Share", close) { vm.share(track) }
+            if (shown("artist") && track.artistId != null) MenuItem("Go to artist", close) { vm.openArtist(track.artistId, track.artist) }
             extraActions.forEach { (label, action) -> MenuItem(label, close, action) }
         }
     }

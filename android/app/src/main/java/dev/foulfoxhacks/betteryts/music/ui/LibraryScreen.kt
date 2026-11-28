@@ -120,7 +120,25 @@ fun LibraryScreen(vm: AppViewModel, pad: PaddingValues) {
                     item { EmptyNote(if (q.isEmpty()) "No liked songs yet" else "No matches", if (q.isEmpty()) "Tap ♡ in the player, or ⋮ → Add to favorites on any song." else "Nothing in your liked songs matches \"$q\".") }
                 } else {
                     item { PlayShuffle(onPlay = { vm.playTracks(songs, 0) }, onShuffle = { vm.playTracks(songs, 0, shuffle = true) }) }
-                    itemsIndexed(songs, key = { _, t -> "fav-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(songs, i) }) }
+                    if (dev.foulfoxhacks.betteryts.music.ui.theme.Brand.look.libraryGrid) {
+                        // Grid view (Settings › Customize): covers three to a row.
+                        songs.chunked(3).forEachIndexed { r, row ->
+                            item(key = "fav-row-$r") {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    row.forEach { t ->
+                                        Column(Modifier.weight(1f).clickable { vm.playTracks(songs, songs.indexOf(t)) }) {
+                                            RemoteImage(t.art, Modifier.fillMaxWidth().aspectRatio(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)))
+                                            Text(t.title, Modifier.padding(top = 6.dp), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(t.artist, color = Brand.Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                                }
+                            }
+                        }
+                    } else {
+                        itemsIndexed(songs, key = { _, t -> "fav-" + t.id }) { i, t -> TrackRow(vm, t, onClick = { vm.playTracks(songs, i) }) }
+                    }
                 }
             }
 

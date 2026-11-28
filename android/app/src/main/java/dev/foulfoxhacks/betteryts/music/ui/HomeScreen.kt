@@ -104,7 +104,7 @@ fun HomeScreen(vm: AppViewModel, pad: PaddingValues) {
     LazyColumn(
         Modifier
             .fillMaxSize()
-            .background(Brush.radialGradient(listOf(Brand.Glow, Color.Transparent), center = Offset(1000f, 0f), radius = 900f)),
+            .background(Color.Transparent),
         contentPadding = PaddingValues(bottom = pad.calculateBottomPadding()),
     ) {
         item { BrandTopBar(vm, pad.calculateTopPadding()) }
@@ -120,85 +120,100 @@ fun HomeScreen(vm: AppViewModel, pad: PaddingValues) {
             }
         }
 
-        // Speed dial: what you play most, nine at a time.
-        val dial = (lib.history + lib.favorites).distinctBy { it.id }.take(27)
-        if (dial.size >= 3) item { SpeedDial(vm, dial) }
-
-        if (quickPicks.isNotEmpty()) {
-            shelfHeader("Start radio from a song", "Quick picks", action = "Play all") { vm.playTracks(quickPicks, 0) }
-            item { QuickPicks(vm, quickPicks) }
-        }
-
-        val mixes = vm.mixes
-        if (mixes.isNotEmpty() && vm.pluginOn("radio")) {
-            shelfHeader("Endless radio, made from your listening", "Your mixes")
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    itemsIndexed(mixes, key = { _, m -> "mix-" + m.second.id }) { i, (name, seed) -> MixCard(name, seed, i) { vm.startRadio(seed) } }
+        // Sections in the order (and visibility) chosen in Settings › Customize › Home.
+        val sections: Map<String, LazyListScope.() -> Unit> = mapOf(
+            "speedDial" to section {
+                // Speed dial: what you play most, nine at a time.
+                val dial = (lib.history + lib.favorites).distinctBy { it.id }.take(27)
+                if (dial.size >= 3) item { SpeedDial(vm, dial) }
+            },
+            "quickPicks" to section {
+                if (quickPicks.isNotEmpty()) {
+                    shelfHeader("Start radio from a song", "Quick picks", action = "Play all") { vm.playTracks(quickPicks, 0) }
+                    item { QuickPicks(vm, quickPicks) }
                 }
-            }
-        }
-
-        if (lib.history.isNotEmpty()) {
-            shelfHeader("Your recent plays", "Listen again")
-            item {
-                val history = lib.history.take(20)
-                LazyHorizontalGrid(
-                    rows = GridCells.Fixed(2),
-                    // Two rows of cards (144dp art + two title lines + artist) plus the gap.
-                    modifier = Modifier.height(232.dp * 2 + 10.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    itemsIndexed(history, key = { _, t -> "again-" + t.id }) { i, t -> TrackCard(t) { vm.playTracks(history, i) } }
-                }
-            }
-        }
-
-        if (lib.followed.isNotEmpty()) {
-            shelfHeader("From artists you follow", "New releases", action = "Play all") { vm.playTracks(feed, 0) }
-            when (val f = vm.feed) {
-                Load.Loading -> item { Loading() }
-                is Load.Failed -> item { ErrorBox(f.message) { vm.refreshFeed() } }
-                is Load.Ready -> item {
-                    if (f.value.isEmpty()) EmptyNote("Nothing new", "Your artists haven't posted anything recently.")
-                    else TrackCarousel(f.value.take(20)) { i -> vm.playTracks(f.value, i) }
-                }
-            }
-        }
-
-        // A shelf that came back empty is left out rather than shown as a bare heading.
-        vm.shelves.filter { (it.tracks as? Load.Ready)?.value?.isEmpty() != true }.forEach { shelf ->
-            shelfHeader("Mixed for you", shelf.title, action = "Play") { (shelf.tracks as? Load.Ready)?.value?.let { vm.playTracks(it, 0) } }
-            item {
-                when (val s = shelf.tracks) {
-                    Load.Loading -> SkeletonCarousel()
-                    is Load.Failed -> ErrorBox(s.message) { vm.retryShelves() }
-                    is Load.Ready -> TrackCarousel(s.value) { i -> vm.playTracks(s.value, i) }
-                }
-            }
-        }
-
-        if (lib.playlists.isNotEmpty()) {
-            shelfHeader("Made by you", "Your playlists")
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(lib.playlists, key = { "pl-" + it.id }) { p ->
-                        Column(Modifier.width(144.dp).clickable { vm.openUserPlaylist(p.id) }) {
-                            RemoteImage(p.tracks.firstOrNull()?.art, Modifier.size(144.dp))
-                            Text(p.name, Modifier.padding(top = 8.dp), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(if (p.fromYouTube) "From YouTube · ${p.tracks.size}" else "${p.tracks.size} songs", color = Brand.Muted, fontSize = 12.sp)
+            },
+            "mixes" to section {
+                val mixes = vm.mixes
+                if (mixes.isNotEmpty() && vm.pluginOn("radio")) {
+                    shelfHeader("Endless radio, made from your listening", "Your mixes")
+                    item {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            itemsIndexed(mixes, key = { _, m -> "mix-" + m.second.id }) { i, (name, seed) -> MixCard(name, seed, i) { vm.startRadio(seed) } }
                         }
                     }
                 }
-            }
-        }
-
-        if (lib.favorites.isNotEmpty()) {
-            shelfHeader("Songs you love", "Favorites", action = "Shuffle") { vm.playTracks(lib.favorites, 0, shuffle = true) }
-            item { TrackCarousel(lib.favorites.take(20)) { i -> vm.playTracks(lib.favorites, i) } }
-        }
+            },
+            "listenAgain" to section {
+                if (lib.history.isNotEmpty()) {
+                    shelfHeader("Your recent plays", "Listen again")
+                    item {
+                        val history = lib.history.take(20)
+                        LazyHorizontalGrid(
+                            rows = GridCells.Fixed(2),
+                            // Two rows of cards (144dp art + two title lines + artist) plus the gap.
+                            modifier = Modifier.height(232.dp * 2 + 10.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            itemsIndexed(history, key = { _, t -> "again-" + t.id }) { i, t -> TrackCard(t) { vm.playTracks(history, i) } }
+                        }
+                    }
+                }
+            },
+            "newReleases" to section {
+                if (lib.followed.isNotEmpty()) {
+                    shelfHeader("From artists you follow", "New releases", action = "Play all") { vm.playTracks(feed, 0) }
+                    when (val f = vm.feed) {
+                        Load.Loading -> item { Loading() }
+                        is Load.Failed -> item { ErrorBox(f.message) { vm.refreshFeed() } }
+                        is Load.Ready -> item {
+                            if (f.value.isEmpty()) EmptyNote("Nothing new", "Your artists haven't posted anything recently.")
+                            else TrackCarousel(f.value.take(20)) { i -> vm.playTracks(f.value, i) }
+                        }
+                    }
+                }
+            },
+            "mixedForYou" to section {
+                // A shelf that came back empty is left out rather than shown as a bare heading.
+                vm.shelves.filter { (it.tracks as? Load.Ready)?.value?.isEmpty() != true }.forEach { shelf ->
+                    shelfHeader("Mixed for you", shelf.title, action = "Play") { (shelf.tracks as? Load.Ready)?.value?.let { vm.playTracks(it, 0) } }
+                    item {
+                        when (val s = shelf.tracks) {
+                            Load.Loading -> SkeletonCarousel()
+                            is Load.Failed -> ErrorBox(s.message) { vm.retryShelves() }
+                            is Load.Ready -> TrackCarousel(s.value) { i -> vm.playTracks(s.value, i) }
+                        }
+                    }
+                }
+            },
+            "playlists" to section {
+                if (lib.playlists.isNotEmpty()) {
+                    shelfHeader("Made by you", "Your playlists")
+                    item {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(lib.playlists, key = { "pl-" + it.id }) { p ->
+                                Column(Modifier.width(144.dp).clickable { vm.openUserPlaylist(p.id) }) {
+                                    RemoteImage(p.tracks.firstOrNull()?.art, Modifier.size(144.dp))
+                                    Text(p.name, Modifier.padding(top = 8.dp), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(if (p.fromYouTube) "From YouTube · ${p.tracks.size}" else "${p.tracks.size} songs", color = Brand.Muted, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "favorites" to section {
+                if (lib.favorites.isNotEmpty()) {
+                    shelfHeader("Songs you love", "Favorites", action = "Shuffle") { vm.playTracks(lib.favorites, 0, shuffle = true) }
+                    item { TrackCarousel(lib.favorites.take(20)) { i -> vm.playTracks(lib.favorites, i) } }
+                }
+            },
+            "stations" to section { stationsShelf(vm) },
+            "smart" to section { if (vm.smartPlaylists.isNotEmpty()) smartShelf(vm) },
+        )
+        Brand.look.homeSections.forEach { key -> sections[key]?.invoke(this) }
 
         if (lib.isEmpty) {
             item {
@@ -219,6 +234,9 @@ fun HomeScreen(vm: AppViewModel, pad: PaddingValues) {
         }
     }
 }
+
+/** Types a Home section (the receiver doesn't infer through `mapOf`). */
+private fun section(block: LazyListScope.() -> Unit) = block
 
 /** Eyebrow + display title, the akasammythepuppy.me / Mello Zone section header. */
 private fun LazyListScope.shelfHeader(eyebrow: String, title: String, action: String? = null, onAction: () -> Unit = {}) {
