@@ -63,6 +63,44 @@ jobs:
       - name: Build sideload and Play Store debug APKs
         working-directory: android
         run: ./gradlew --no-daemon assembleSideloadDebug assemblePlayDebug
+      # Every build of main is also published as a release: signed APK and Play bundle.
+      - name: Restore release signing key (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BTM_RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.BTM_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BTM_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BTM_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYSTORE_BASE64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo "::error::Missing one or more BTM release-signing secrets. See the README release-signing instructions."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-keystore.jks"
+          cat > android/keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/release-keystore.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+      - name: Build signed sideload APK and Play bundle (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: android
+        run: |
+          ./gradlew --no-daemon :app:assembleSideloadRelease :app:bundlePlayRelease
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/sideload/release/app-sideload-release.apk
+          rm -f keystore.properties
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: betteryts-android-signed-${{ github.run_number }}
+          path: |
+            android/app/build/outputs/apk/sideload/release/*.apk
+            android/app/build/outputs/bundle/playRelease/*.aab
+          if-no-files-found: error
+          retention-days: 30
       - name: Checksums
         shell: bash
         run: |
@@ -147,3 +185,49 @@ jobs:
             windows-sha256.txt
           if-no-files-found: error
           retention-days: 30
+
+  # Every push to main becomes the latest GitHub Release (signed Android + desktop packages).
+  publish:
+    name: Publish as the latest release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [android, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+          pattern: betteryts-*
+          merge-multiple: true
+      - name: Collect release files
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find dl -type f \( -name 'app-sideload-release.apk' -o -name '*.aab' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} dist/ \;
+          ls -la dist
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          version=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts)
+          printf 'Version: %s\nBuild: %s\nCommit: %s\n' "$version" "${{ github.run_number }}" "$GITHUB_SHA" > dist/BUILD-INFO.txt
+          echo "tag=v${version}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "name=BetterYTS Music ${version} (build ${{ github.run_number }})" >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          make_latest: "true"
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.apk
+            dist/*.aab
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.msi
+            dist/*.exe
+            dist/SHA256SUMS.txt
+            dist/BUILD-INFO.txt
