@@ -113,7 +113,7 @@ fun MiniPlayer(vm: AppViewModel, player: PlayerController, track: Track, height:
         Row(Modifier.fillMaxWidth().height(height - 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.width(videoWidth))
             Column(Modifier.weight(1f).fillMaxHeight().clickable { vm.playerExpanded = true }.padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
-                Text(track.title, color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(vm.titleOf(track), color = Brand.Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(track.artist, color = Brand.Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = vm::togglePlay) {
@@ -277,7 +277,7 @@ private fun PlayerTopBar(vm: AppViewModel, track: Track) {
 private fun TitleRow(vm: AppViewModel, track: Track) {
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(track.title, Modifier.basicMarquee(), color = Brand.Paper, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 1)
+            Text(vm.titleOf(track), Modifier.basicMarquee(), color = Brand.Paper, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 1)
             Text(
                 track.artist,
                 Modifier.clickable(enabled = track.artistId != null) { vm.openArtist(track.artistId, track.artist) },

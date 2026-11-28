@@ -24,6 +24,7 @@ struct State {
 	store: Store,
 	settings: SettingsStore,
 	stations: StationStore,
+	sync: crate::sync::SyncStore,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -40,7 +41,7 @@ fn state() -> MutexGuard<'static, Option<State>> {
 
 fn with_state<R>(f: impl FnOnce(&mut State) -> Result<R, CoreError>) -> Result<R, CoreError> {
 	let mut guard = state();
-	let s = guard.get_or_insert_with(|| State { api: Api::new(DEFAULT_BASE), queue: Queue::default(), store: Store::in_memory(), settings: SettingsStore::in_memory(), stations: StationStore::in_memory() });
+	let s = guard.get_or_insert_with(|| State { api: Api::new(DEFAULT_BASE), queue: Queue::default(), store: Store::in_memory(), settings: SettingsStore::in_memory(), stations: StationStore::in_memory(), sync: crate::sync::SyncStore::in_memory() });
 	f(s)
 }
 
@@ -145,7 +146,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 			let queue = guard.take().map(|s| s.queue).unwrap_or_default();
 			let mut api = Api::new(&base);
 			api.region = opt_str(a, "region").unwrap_or("").chars().filter(|c| c.is_ascii_alphabetic()).take(2).collect::<String>().to_uppercase();
-			*guard = Some(State { api, queue, store: Store::open(Path::new(&dir)), settings: SettingsStore::open(Path::new(&dir)), stations: StationStore::open(Path::new(&dir)) });
+			*guard = Some(State { api, queue, store: Store::open(Path::new(&dir)), settings: SettingsStore::open(Path::new(&dir)), stations: StationStore::open(Path::new(&dir)), sync: crate::sync::SyncStore::open(Path::new(&dir)) });
 			Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "baseUrl": base }))
 		}
 
@@ -644,6 +645,58 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 		}
 		"share.clean" => Ok(json!(links::clean_share(&arg::<String>(a, "text")?))),
 
+		// ---- BetterYTS Sync: end-to-end encrypted library sync (sync.rs) ----
+		"sync.get" => with_state(|s| Ok(s.sync.state.view())),
+		"sync.newCode" => with_state(|s| {
+			s.sync.state.set_code(&crate::sync::code_of(&crate::sync::new_key()))?;
+			s.sync.save()?;
+			Ok(s.sync.state.view())
+		}),
+		"sync.setCode" => {
+			let code: String = arg(a, "code")?;
+			with_state(|s| {
+				s.sync.state.set_code(&code)?;
+				s.sync.save()?;
+				Ok(s.sync.state.view())
+			})
+		},
+		"sync.off" => with_state(|s| {
+			let had = s.sync.state.code.take().is_some();
+			s.sync.state = crate::sync::SyncState::default();
+			s.sync.save()?;
+			Ok(json!({ "removed": had }))
+		}),
+		"sync.now" => {
+			let (api, mut state, local) = with_state(|s| {
+				let local = crate::backup::export(&s.store.lib, &s.settings.settings, env!("CARGO_PKG_VERSION"), Store::now());
+				Ok((s.api.clone(), s.sync.state.clone(), local))
+			})?;
+			if state.code.is_none() {
+				return Err(CoreError::invalid("Sync isn't set up on this device".to_string()));
+			}
+			// The round trip happens without the lock, so a slow network never freezes playback.
+			let out = crate::sync::sync_once(&api, &mut state, &local, Store::now()).map_err(CoreError::from)?;
+			with_state(|s| {
+				s.sync.state = state;
+				s.sync.save()?;
+				if out.changed {
+					crate::sync::apply(&out.merged, &mut s.store, &mut s.settings.settings)?;
+					s.store.save()?;
+					s.settings.save()?;
+				}
+				Ok(json!({ "changed": out.changed, "version": out.version, "sync": s.sync.state.view(), "library": library_view(&s.store.lib)? }))
+			})
+		}
+		"sync.erase" => {
+			let (api, mut state) = with_state(|s| Ok((s.api.clone(), s.sync.state.clone())))?;
+			crate::sync::erase(&api, &mut state).map_err(CoreError::from)?;
+			with_state(|s| {
+				s.sync.state = state;
+				s.sync.save()?;
+				Ok(s.sync.state.view())
+			})
+		}
+
 		// ---- scrobbling (ListenBrainz, opt-in; the token stays in the settings file) ----
 		"scrobble.connect" => {
 			let token: String = arg(a, "token")?;
@@ -676,6 +729,7 @@ fn handle(method: &str, a: &Value) -> Result<Value, CoreError> {
 		}
 		"plugin.dislikes" => Ok(plugins::dislikes(&api(), &arg::<String>(a, "id")?)?),
 		"plugin.lyrics" => to_value(plugins::lyrics(&arg::<Track>(a, "track")?)?),
+		"plugin.dearrow" => to_value(plugins::dearrow(&arg::<String>(a, "id")?)?),
 		"plugin.protv" => {
 			let name: String = arg::<Option<String>>(a, "name")?.unwrap_or_default();
 			Ok(Value::String(plugins::protv_playlist(&name, &arg::<Vec<Track>>(a, "tracks")?)))
@@ -826,6 +880,17 @@ mod tests {
 		assert_eq!(st["data"]["theme"], "mello");
 		assert_eq!(st["data"]["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "lyrics").unwrap()["enabled"], false);
 		assert!(call("plugin.protv", json!({ "name": "Q", "tracks": [track("aaaaaaaaaaa")] }))["data"].as_str().unwrap().contains("@https://www.youtube.com/watch?v=aaaaaaaaaaa"));
+
+		// BetterYTS Sync: a code is checked and kept across a restart; syncing without one fails.
+		assert_eq!(call("sync.now", json!({}))["ok"], false);
+		assert_eq!(call("sync.setCode", json!({ "code": "BTS1-1234" }))["ok"], false);
+		let code = crate::sync::code_of(&[7u8; 32]);
+		let set = call("sync.setCode", json!({ "code": &code }));
+		assert_eq!((set["data"]["enabled"].as_bool(), set["data"]["code"].as_str()), (Some(true), Some(code.as_str())));
+		call("init", json!({ "dataDir": dir.to_string_lossy() }));
+		assert_eq!(call("sync.get", json!({}))["data"]["code"], code, "the code survives a restart");
+		assert_eq!(call("sync.off", json!({}))["data"]["removed"], true);
+		assert_eq!(call("sync.get", json!({}))["data"]["enabled"], false);
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 }

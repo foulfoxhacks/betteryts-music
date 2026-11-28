@@ -96,6 +96,18 @@ class PlayerController(context: Context) {
         js("captions(${if (code == null) "null" else JSONObject.quote(code)})")
     }
 
+    /** Turn captions on by themselves for songs that have them (Settings › Playback). */
+    var captionsAuto = true
+        set(value) {
+            field = value
+            if (!value) chooseCaptions(null)
+        }
+
+    /** The video whose caption list was asked for, so it's asked for once per song. */
+    private var listedFor: String? = null
+    /** The video captions were switched on for, so a choice isn't overridden twice. */
+    private var autoOnFor: String? = null
+
     /** Playback speed chosen by the user. Each new video starts at 1x, so the page re-applies it. */
     var speed by mutableFloatStateOf(1f)
         private set
@@ -275,6 +287,8 @@ class PlayerController(context: Context) {
         endedFor = null
         currentId = id
         captionTracks = emptyList()
+        listedFor = null
+        autoOnFor = null
         position = startSeconds
         duration = 0f
         startedFor = null
@@ -404,6 +418,11 @@ class PlayerController(context: Context) {
                 startedFor = id
                 listener?.onStartedPlaying(id)
             }
+            // Captions on by default: ask what the song has once it starts.
+            if (state == 1 && captionsAuto && id != null && listedFor != id) {
+                listedFor = id
+                listCaptions()
+            }
             if (state == 0 && id != null) reportEnded(id, "embed")
         }
 
@@ -413,6 +432,15 @@ class PlayerController(context: Context) {
                 val a = org.json.JSONArray(json)
                 (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { o -> o.optString("code").takeIf(String::isNotBlank)?.let { it to o.optString("name", it) } } }
             }.getOrDefault(emptyList())
+            // English first, then whatever the song has. A language already chosen wins.
+            val id = currentId
+            if (captionsAuto && captionLanguage == null && id != null && autoOnFor != id) {
+                val pick = captionTracks.firstOrNull { it.first.startsWith("en") } ?: captionTracks.firstOrNull()
+                if (pick != null) {
+                    autoOnFor = id
+                    chooseCaptions(pick.first)
+                }
+            }
         }
 
         @JavascriptInterface

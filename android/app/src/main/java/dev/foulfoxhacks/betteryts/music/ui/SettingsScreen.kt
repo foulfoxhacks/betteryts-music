@@ -97,6 +97,14 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
                     checked = vm.resumeEnabled,
                 ) { vm.setResume(it) }
             }
+            item {
+                ToggleRow(
+                    icon = AppIcons.Lyrics,
+                    title = "Captions on by default",
+                    description = "When a song has captions, turn them on straight away. Pick a language, or Off, in the player's Sound panel.",
+                    checked = vm.captionsOn,
+                ) { vm.setCaptions(it) }
+            }
             item { PlaybackExtras(vm) }
 
             item {
@@ -126,6 +134,9 @@ fun SettingsScreen(vm: AppViewModel, pad: PaddingValues) {
 
             item { SectionHeader("Backup") }
             item { BackupCard(vm) }
+
+            item { SectionHeader("Sync") }
+            item { SyncCard(vm) }
 
             item { SectionHeader("Hidden") }
             item { HiddenCard(vm) }
@@ -243,6 +254,53 @@ private fun HiddenCard(vm: AppViewModel) {
         androidx.compose.material3.OutlinedTextField(words, { words = it }, Modifier.fillMaxWidth(), label = { Text("Words") }, placeholder = { Text("sped up, nightcore", color = Brand.Muted) }, colors = colors)
         val changed = channels != vm.settings.hiddenChannels.joinToString(", ") || words != vm.settings.hiddenWords.joinToString(", ")
         BrandButton("Save", { vm.setHidden(channels, words) }, primary = true, enabled = changed)
+    }
+}
+
+/** BetterYTS Sync: end-to-end encrypted library sync with the website and other devices. */
+@androidx.compose.runtime.Composable
+private fun SyncCard(vm: AppViewModel) {
+    val sync = vm.sync
+    var code by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    val colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(focusedBorderColor = Brand.Gold, unfocusedBorderColor = Brand.Line, cursorColor = Brand.Gold, focusedTextColor = Brand.Paper, unfocusedTextColor = Brand.Paper)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Liked songs, playlists, followed artists, smart playlists and hidden lists, kept in step with the website and your other devices. End-to-end encrypted: the code is the only key and BetterYTS only stores ciphertext. The queue and listening stats stay on this phone.",
+            color = Brand.Muted,
+            fontSize = 13.sp,
+        )
+        if (sync != null && sync.enabled) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    sync.code ?: "",
+                    Modifier.weight(1f),
+                    color = Brand.Paper,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 13.sp,
+                )
+                androidx.compose.material3.IconButton(onClick = {
+                    context.getSystemService(android.content.ClipboardManager::class.java)?.setText(sync.code ?: "")
+                    vm.say("Sync code copied")
+                }) { Icon(AppIcons.Copy, "Copy sync code", tint = Brand.Gold) }
+            }
+            val when_ = sync.lastSync?.let { java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(it)) } ?: "never"
+            Text("${sync.items} items synced \u00b7 $when_", color = Brand.Muted, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrandButton(if (vm.syncBusy) "Syncing\u2026" else "Sync now", { vm.syncNow() }, primary = true, enabled = !vm.syncBusy)
+                BrandButton("New code", { vm.newSyncCode() }, enabled = !vm.syncBusy)
+                BrandButton("Turn off", { vm.turnOffSync() }, enabled = !vm.syncBusy)
+            }
+            Text("Erasing deletes the encrypted copy on BetterYTS; every device keeps its own library.", color = Brand.Muted, fontSize = 12.sp)
+            BrandButton("Erase the synced copy", { vm.eraseSyncVault() }, enabled = !vm.syncBusy)
+        } else {
+            androidx.compose.material3.OutlinedTextField(code, { code = it }, Modifier.fillMaxWidth(), label = { Text("Sync code") }, placeholder = { Text("BTS1-XXXX-XXXX-\u2026", color = Brand.Muted) }, colors = colors, singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrandButton(if (vm.syncBusy) "Syncing\u2026" else "Use this code", { vm.setSyncCode(code) }, primary = true, enabled = code.isNotBlank() && !vm.syncBusy)
+                BrandButton("Create a new code", { vm.newSyncCode() }, enabled = !vm.syncBusy)
+            }
+            Text("On the website: Settings \u203a Sync creates a code, or accepts this one.", color = Brand.Muted, fontSize = 12.sp)
+        }
     }
 }
 

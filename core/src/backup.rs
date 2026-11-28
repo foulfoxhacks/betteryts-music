@@ -111,6 +111,8 @@ pub fn export_with_queue(lib: &Library, settings: &Settings, app_version: &str, 
 		},
 		"library": {
 			"favorites": lib.favorites.iter().map(video).collect::<Vec<_>>(),
+			// The website keeps dislikes in its backups too (they shape smart playlists).
+			"disliked": lib.disliked.iter().map(video).collect::<Vec<_>>(),
 			"history": lib.history.iter().map(|h| {
 				let mut v = video(&h.track);
 				v["at"] = json!(h.played_at);
@@ -139,6 +141,8 @@ pub fn export_with_queue(lib: &Library, settings: &Settings, app_version: &str, 
 #[serde(rename_all = "camelCase")]
 pub struct BackupSummary {
 	pub favorites_added: usize,
+	#[serde(default)]
+	pub dislikes_added: usize,
 	pub playlists_added: usize,
 	pub playlists_updated: usize,
 	pub artists_added: usize,
@@ -249,6 +253,9 @@ pub fn import_with(text: &str, store: &mut Store, settings: &mut Settings, mode:
 	let raw_favorites = list(lib, "favorites");
 	let liked: Vec<Track> = raw_favorites.iter().filter_map(track).collect();
 	sum.invalid += raw_favorites.len() - liked.len();
+	let raw_disliked = list(lib, "disliked");
+	let disliked: Vec<Track> = raw_disliked.iter().filter_map(track).collect();
+	sum.invalid += raw_disliked.len() - disliked.len();
 	let raw_subs = list(lib, "subscriptions");
 	let followed: Vec<Artist> = raw_subs
 		.iter()
@@ -291,6 +298,7 @@ pub fn import_with(text: &str, store: &mut Store, settings: &mut Settings, mode:
 		store.lib.playlists.clear();
 		store.lib.followed.clear();
 		store.lib.history.clear();
+		store.lib.disliked.clear();
 		store.lib.pinned = keep_pins;
 	}
 
@@ -312,6 +320,16 @@ pub fn import_with(text: &str, store: &mut Store, settings: &mut Settings, mode:
 			}
 			sum.playlists_added += 1;
 		}
+	}
+	// Dislikes are exclusive with likes, like the app's own dislike button.
+	for d in disliked {
+		if store.lib.is_disliked(&d.id) {
+			continue;
+		}
+		store.lib.favorites.retain(|f| f.id != d.id);
+		store.lib.disliked.insert(0, d);
+		store.lib.disliked.truncate(crate::library::MAX_FAVORITES);
+		sum.dislikes_added += 1;
 	}
 	for h in list(lib, "history").iter().take(300) {
 		if let Some(t) = track(h) {
@@ -449,11 +467,11 @@ mod tests {
 		assert_eq!(v["settings"]["skip"]["sponsor"], true);
 		assert_eq!(v["settings"]["skip"]["music_offtopic"], false);
 		assert_eq!(v["library"]["queue"].as_array().unwrap().len(), 1, "phone songs aren't exported");
-		// The website's map: hook/exclusive_access are site-only and ignored by the app.
-		let site = json!({ "format": "betteryts-backup", "version": 1, "settings": { "skip": { "selfpromo": true, "hook": true, "sponsor": false } }, "library": {} });
+		// The website's map now that the app knows every category it offers.
+		let site = json!({ "format": "betteryts-backup", "version": 1, "settings": { "skip": { "selfpromo": true, "hook": true, "exclusive_access": true, "sponsor": false } }, "library": {} });
 		let mut st = Settings::default();
 		import(&site.to_string(), &mut Store::in_memory(), &mut st).unwrap();
-		assert_eq!(st.sponsor_categories, ["selfpromo"]);
+		assert_eq!(st.sponsor_categories, ["exclusive_access", "hook", "selfpromo"]);
 	}
 
 	#[test]

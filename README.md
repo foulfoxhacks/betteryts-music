@@ -65,9 +65,12 @@ builds read a local test server instead (`http://10.0.2.2:5175/update.json`).
 
 ## Desktop (Linux, Windows)
 
-`desktop/` is a Tauri 2 app around the same core: search, library, stations, queue and the
-official embedded player (served from a localhost origin so embeds load), with media keys via MPRIS
-(Linux) and the Windows media overlay. Build: install Rust and Node, plus on Linux
+`desktop/` is a Tauri 2 app around the same core: search, library, stations, insights, queue and
+the official embedded player (served from a localhost origin so embeds load), with media keys via
+MPRIS (Linux) and the Windows media overlay. Settings has themes, plugins (DeArrow is off by
+default), SponsorBlock categories and **Sync**, and **Link nearby devices** hosts or joins a BTLink
+room, so a computer and a phone play together the same way two phones do. Build: install Rust and Node,
+plus on Linux
 `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`, then
 `cd desktop && npx @tauri-apps/cli@2 build`.
 
@@ -132,9 +135,11 @@ in a separate secure backup. The release workflow writes a temporary keystore an
 file only on its isolated runner, verifies the APK signature, then attaches the APK, AAB, and
 SHA-256 checksums to the GitHub Release.
 
-To publish, push a version tag such as `v0.9.4` after updating the app's `versionCode` and
-`versionName`. The workflow does not change version numbers automatically. Keep using this
-same keystore for every update to preserve Android install/update compatibility.
+To publish, push a version tag such as `v0.9.4` after updating the app's `versionName`. The
+`versionCode` is bumped automatically: the build adds the workflow run number to the base in
+`android/app/build.gradle.kts`, so every build of `main` is a newer update for the in-app updater,
+and `BUILD-INFO.txt` on the release carries the APK's own version code. Keep using this same
+keystore for every update to preserve Android install/update compatibility.
 
 ## Optional: Connect with Google
 
@@ -152,14 +157,25 @@ doesn't need Google Play services. Setup and the Google Cloud steps: [docs/googl
   equalizer, compressor, skip silences and tempo/key analysis.
 - **Link nearby devices** (BTLink): encrypted, millisecond-level sync between devices on the same
   Wi-Fi, by QR or invite link. See [docs/btlink.md](docs/btlink.md).
-- **Scrobbling** to ListenBrainz, SponsorBlock categories, dislikes, Like all, clean share links,
+- **Scrobbling** to ListenBrainz, SponsorBlock categories (including hooks and exclusive-access
+  intros), **DeArrow** community titles (off by default), dislikes, Like all, clean share links,
   player gestures, launcher shortcuts, themes (BetterYTS, AMOLED, Ember, Mello) and accents.
+- **Captions on by default**: songs that have captions start with them on, in English when
+  available; Settings › Playback turns it off and the player's Sound panel picks a language.
 - **Settings › Diagnostics**: player state history and recent requests, copyable without personal
   data. Privacy statement in Settings › About and [PRIVACY.md](PRIVACY.md).
 
 - **Spotify**: import public playlists by link, or Sign in with Spotify for private playlists and
   Liked Songs (PKCE; the token is used for one import and not saved).
 - **Backup**: Settings › Backup exports/imports the same file as the website, so libraries move both ways.
+- **Sync**: end-to-end encrypted library sync between the app, the website and your other devices
+  (`core/src/sync.rs`, spec in the website's `docs/sync.md`). Liked songs, playlists, followed
+  artists, dislikes, smart playlists and hidden lists converge per item — the newest change wins,
+  so unliking on the phone and renaming a playlist on the site both stick. The sync code
+  (`BTS1-…`) is the only key: it derives a vault ID, an auth secret and the AES-256-GCM key with
+  SHA-256, and BetterYTS only ever stores ciphertext. The queue and listening stats stay on each
+  device. Settings › Sync creates a code, joins with one, syncs now (and quietly on launch every
+  few hours), turns off or erases the synced copy.
 - **Send to a VRChat world**: Library card; just this visit by default, or saved for 30 days.
 - **Hidden artists and words**, plugin categories and sandboxed community plugins, Listen
   Together rooms with QR invites.

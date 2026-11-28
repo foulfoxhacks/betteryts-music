@@ -42,6 +42,18 @@ input[type=range] { accent-color: var(--accent); }
 #toast.show { opacity: 1; }
 .chip { border-radius: 999px; padding: 6px 12px; } .chip.on { background: var(--accent); color: var(--ink); }
 .muted { color: var(--muted); }
+/* Insights: a row of big numbers and a small bar chart of listening hours. */
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.stat { background: var(--surface); border-radius: 14px; padding: 14px; }
+.stat b { display: block; font-size: 26px; font-weight: 900; color: var(--accent); }
+.stat span { color: var(--muted); font-size: 12px; }
+.stat i { display: block; color: var(--muted); font-size: 11px; font-style: normal; }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 130px; background: var(--surface); border-radius: 14px; padding: 10px; }
+.bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+.bar i { width: 100%; min-height: 2px; background: var(--accent); border-radius: 3px 3px 0 0; }
+.bar span { height: 13px; color: var(--muted); font-size: 10px; }
+/* Link nearby devices: the invite is long, so it wraps instead of stretching the page. */
+.invite { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; background: var(--surface); border-radius: 10px; padding: 8px; margin-top: 10px; }
 #splash { position: fixed; inset: 0; background: var(--ink); z-index: 9; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity .4s; }
 #splash img { width: min(420px, 60vw); animation: pop .7s ease-out; } #splash p { color: var(--muted); }
 #splash.gone { opacity: 0; pointer-events: none; }
