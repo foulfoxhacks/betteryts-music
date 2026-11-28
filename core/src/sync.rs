@@ -9,8 +9,13 @@
 //! song, subscription, dislike, playlist, smart playlist and the settings, when it last changed
 //! and a hash of what it was. The newest change wins, so liking a song on the phone and renaming a
 //! playlist on the website both survive. The play queue and play statistics are not synced.
+//!
+//! Deviation from the spec: `docs/sync.md` unions recent-play history across devices, but this
+//! implementation leaves it out entirely — it is neither merged nor uploaded, so each device keeps
+//! its own. The website tolerates that (its `arr()` helpers read a missing list as empty), and it
+//! keeps its own history when the app's payload has none; the app ignores the site's history.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::{Aead, Payload};
@@ -124,7 +129,9 @@ pub fn parse_code(code: &str) -> Option<[u8; 32]> {
 	})
 }
 
-/// `BTS1-…` from the all-sevens test key. Both the app and the website assert this exact string.
+/// The vault's 32-character ID, used in the URL path: the first halves of SHA-256 over
+/// `betteryts-sync:id:<key hex>`. Both the app and the website assert this exact string for the
+/// all-sevens key.
 pub fn vault_id(key: &[u8; 32]) -> String {
 	sha256_hex(&format!("betteryts-sync:id:{}", hex(key)))[..32].to_string()
 }
@@ -343,13 +350,9 @@ pub fn compose(ledger: &Ledger, local: &Value, remote: &Value) -> Value {
 		o.insert("subscriptions".into(), json!(ordered("c:", arr(l, "subscriptions"))));
 		o.insert("disliked".into(), json!(ordered("d:", arr(l, "disliked"))));
 		o.insert("playlists".into(), json!(ordered("p:", arr(l, "playlists"))));
-		let remote_lib = remote.get("library").filter(|v| v.is_object()).unwrap_or(&empty);
-		let mut history: Vec<Value> = arr(l, "history").iter().chain(arr(remote_lib, "history").iter()).cloned().collect();
-		history.sort_by(|a, b| b.get("at").and_then(Value::as_u64).unwrap_or(0).cmp(&a.get("at").and_then(Value::as_u64).unwrap_or(0)));
-		let mut seen = std::collections::HashSet::new();
-		history.retain(|h| !id_of(h).is_empty() && seen.insert(id_of(h)));
-		history.truncate(300);
-		o.insert("history".into(), json!(history));
+		// Listening history stays on the device that played the song: the local entries are kept
+		// as they are, so applying a merge never drops them, and the other device's are ignored.
+		o.insert("history".into(), json!(arr(l, "history")));
 	}
 	let smart: Vec<Value> = live("s:").into_iter().map(|(_, v)| v).collect();
 	let mut music = out.get("music").cloned().filter(|m| m.is_object()).unwrap_or_else(|| json!({}));
@@ -535,12 +538,16 @@ pub fn sync_once(api: &Api, state: &mut SyncState, local: &Value, now_ms: u64) -
 		let result = compose(&merged, local, &remote_backup);
 		let merged_items = items(&result);
 		let signature = |m: &Items| -> Vec<String> { m.iter().map(|(k, (h, _))| format!("{k}={h}")).collect() };
-		let history_of = |v: &Value| serde_json::to_string(v.get("library").and_then(|l| l.get("history")).unwrap_or(&Value::Null)).unwrap_or_default();
-		let changed = signature(&merged_items) != signature(&mine) || history_of(&result) != history_of(local);
+		let changed = signature(&merged_items) != signature(&mine);
 
 		let mut version = remote_version;
 		if remote_version == 0 || merged != remote_ledger {
-			let payload = json!({ "format": FORMAT, "version": 1, "backup": result.clone(), "ledger": merged.clone() });
+			// Listening history is stripped from the upload, on a copy so this device keeps its own.
+			let mut upload = result.clone();
+			if let Some(lib) = upload.get_mut("library").and_then(Value::as_object_mut) {
+				lib.remove("history");
+			}
+			let payload = json!({ "format": FORMAT, "version": 1, "backup": upload, "ledger": merged.clone() });
 			let (iv, data) = encrypt(&key, &payload.to_string())?;
 			if data.len() > MAX_CIPHERTEXT {
 				return Err("That library is too big to sync".into());
@@ -592,17 +599,6 @@ pub fn apply(merged: &Value, store: &mut Store, settings: &mut Settings) -> Resu
 	}
 	backup::import_with(&merged.to_string(), store, settings, Mode::Replace)?;
 	Ok(())
-}
-
-/// A rough count of what changed, for the "Synced: 3 new songs" message.
-pub fn diff_counts(before: &Items, after: &Items) -> HashMap<&'static str, usize> {
-	let mut out = HashMap::new();
-	for prefix in ["f:", "c:", "d:", "p:", "s:"] {
-		let count = |m: &Items, p: &str| m.keys().filter(|k| k.starts_with(p)).count();
-		let (a, b) = (count(before, prefix), count(after, prefix));
-		out.insert(prefix, b.saturating_sub(a));
-	}
-	out
 }
 
 #[cfg(test)]
@@ -706,6 +702,14 @@ mod tests {
 		let out = compose(&ledger, &local, &remote);
 		assert_eq!(out["library"]["favorites"].as_array().unwrap().len(), 2, "a and c");
 		assert_eq!(out["library"]["playlists"][0]["name"], "Theirs", "a playlist from the other device");
+		// Listening history is per device: the local entries survive and the remote ones are ignored.
+		let mut local_h = backup(vec![t("a")], vec![]);
+		local_h["library"]["history"] = json!([{ "id": "a", "title": "a", "channel": "A", "at": 5 }]);
+		let mut remote_h = backup(vec![t("z")], vec![]);
+		remote_h["library"]["history"] = json!([{ "id": "z", "title": "z", "channel": "A", "at": 9 }]);
+		let out = compose(&Ledger::new(), &local_h, &remote_h);
+		let ids: Vec<&str> = out["library"]["history"].as_array().unwrap().iter().map(|h| h["id"].as_str().unwrap()).collect();
+		assert_eq!(ids, ["a"], "history is neither merged nor dropped");
 	}
 
 	/// A fake vault: GET/PUT with the same versioning rules as the website's SyncVault.
@@ -788,7 +792,8 @@ mod tests {
 		let mut b = SyncState::default();
 		b.set_code(&code).unwrap();
 
-		let lib_a = backup(vec![t("a"), t("b")], vec![]);
+		let mut lib_a = backup(vec![t("a"), t("b")], vec![]);
+		lib_a["library"]["history"] = json!([{ "id": "a", "title": "a", "channel": "A", "at": 900 }]);
 		let first = sync_once(&api, &mut a, &lib_a, 1000).unwrap();
 		assert_eq!((first.version, first.changed), (1, false), "the first upload changes nothing locally");
 
@@ -813,6 +818,11 @@ mod tests {
 		let stored = vault.lock().unwrap().data.clone();
 		assert!(!stored.contains("Mix"), "the server sees no plaintext");
 		assert!(stored.len() > 20);
+		// ... and the played history stays on the device, even though A has some.
+		let key = parse_code(&code).unwrap();
+		let iv = vault.lock().unwrap().iv.clone();
+		let plain: Value = serde_json::from_str(&decrypt(&key, &iv, &stored).unwrap()).unwrap();
+		assert!(plain["backup"]["library"].get("history").is_none(), "history is not uploaded");
 	}
 
 	#[test]
